@@ -13,6 +13,8 @@
     --status-warning-bg: rgba(217, 130, 43, 0.12);
     --status-success: #235347;
     --status-success-bg: rgba(35, 83, 71, 0.12);
+    --status-info: #3B82F6;
+    --status-info-bg: rgba(59, 130, 246, 0.12);
 
     --radius-xs: 6px;
     --radius-sm: 8px;
@@ -32,55 +34,82 @@
 }
 
 [data-theme="light"], :root {
-    --bg-canvas: #F2F5F1;
-    --bg-window: #FAFCFA;
-    --bg-sidebar: #E8EFE8;
-    --bg-surface-secondary: #F0F4EF;
+    --bg-canvas: #EEF2ED;
+    --bg-window: #FAFDF9;
+    --bg-surface: #FFFFFF;
+    --bg-elevated: #FFFFFF;
+    --bg-sidebar: #E6EDE6;
+    --bg-surface-secondary: #F1F5F0;
     --bg-selection: #DCE9DD;
-    --bg-selection-hover: #E2ECE3;
-    --bg-hover: rgba(22, 45, 37, 0.04);
-    --text-primary: #162D25;
-    --text-secondary: #64766B;
-    --text-tertiary: #95A59B;
-    --border-subtle: #DCE4DC;
-    --border-strong: #C4D2C5;
+    --bg-selection-hover: #D2E3D4;
+    --bg-hover: rgba(22, 45, 37, 0.045);
+    --text-primary: #142B23;
+    --text-secondary: #53665C;
+    --text-tertiary: #7D9185;
+    --border-subtle: #D8E1D8;
+    --border-strong: #BACAB9;
+    --border-focus: #235347;
     --action-primary: #235347;
     --action-primary-hover: #163832;
     --action-primary-fg: #FAFCFA;
-    --action-secondary: #E8EFE8;
+    --action-secondary: #E6EDE6;
     --action-secondary-hover: #DCE9DD;
-    --action-secondary-fg: #162D25;
-    --window-shadow: 0 16px 48px rgba(11, 43, 38, 0.08), 0 2px 6px rgba(11, 43, 38, 0.04);
-    --popover-shadow: 0 12px 32px rgba(11, 43, 38, 0.12), 0 1px 3px rgba(11, 43, 38, 0.06);
-    --sidebar-border: rgba(22, 45, 37, 0.08);
-    --code-bg: rgba(22, 45, 37, 0.05);
+    --action-secondary-fg: #142B23;
+    --accent-soft: rgba(35, 83, 71, 0.09);
+    --window-shadow: 0 18px 48px rgba(11, 43, 38, 0.09), 0 2px 6px rgba(11, 43, 38, 0.04);
+    --popover-shadow: 0 14px 36px rgba(11, 43, 38, 0.14), 0 1px 3px rgba(11, 43, 38, 0.06);
+    --shadow-card: 0 1px 2px rgba(11, 43, 38, 0.05);
+    --sidebar-border: rgba(22, 45, 37, 0.09);
+    --code-bg: rgba(22, 45, 37, 0.06);
 }
 
 [data-theme="dark"] {
-    --bg-canvas: #101915;
-    --bg-window: #151F1A;
-    --bg-sidebar: #1A2922;
-    --bg-surface-secondary: #202E26;
-    --bg-selection: #294336;
-    --bg-selection-hover: #2E4C3D;
-    --bg-hover: rgba(229, 239, 229, 0.05);
-    --text-primary: #E5EFE5;
-    --text-secondary: #97AA9D;
-    --text-tertiary: #677E71;
-    --border-subtle: #304138;
-    --border-strong: #3D5347;
+    --bg-canvas: #0D1411;
+    --bg-window: #131C18;
+    --bg-surface: #18231E;
+    --bg-elevated: #1D2B24;
+    --bg-sidebar: #16221C;
+    --bg-surface-secondary: #1B2721;
+    --bg-selection: #253E32;
+    --bg-selection-hover: #2C4A3B;
+    --bg-hover: rgba(229, 239, 229, 0.055);
+    --text-primary: #E7F0E7;
+    --text-secondary: #9DB0A3;
+    --text-tertiary: #6C8376;
+    --border-subtle: #283930;
+    --border-strong: #395044;
+    --border-focus: #8EB69B;
     --action-primary: #8EB69B;
     --action-primary-hover: #DAF1DE;
     --action-primary-fg: #051F20;
-    --action-secondary: #202E26;
-    --action-secondary-hover: #294336;
-    --action-secondary-fg: #E5EFE5;
-    --window-shadow: 0 24px 64px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
-    --popover-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --action-secondary: #1E2C25;
+    --action-secondary-hover: #26382F;
+    --action-secondary-fg: #E7F0E7;
+    --accent-soft: rgba(142, 182, 155, 0.12);
+    --window-shadow: 0 24px 64px rgba(0, 0, 0, 0.58), 0 2px 8px rgba(0, 0, 0, 0.38);
+    --popover-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.25);
     --sidebar-border: rgba(229, 239, 229, 0.08);
-    --code-bg: rgba(229, 239, 229, 0.06);
+    --code-bg: rgba(229, 239, 229, 0.07);
     --status-success: #8EB69B;
-    --status-success-bg: rgba(142, 182, 155, 0.15);
+    --status-success-bg: rgba(142, 182, 155, 0.14);
+    --status-info: #60A5FA;
+    --status-info-bg: rgba(96, 165, 250, 0.14);
+}
+
+html, body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-ui);
+    background-color: var(--bg-canvas);
+    color: var(--text-primary);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+*:focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
 }
 
 @media (prefers-reduced-motion: reduce) {

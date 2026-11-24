@@ -205,6 +205,13 @@ public sealed class WebReviewHandler
             csrf = new { headerName = tokens.HeaderName, token = tokens.RequestToken },
             workspace = Espaco(painel.EspacoTrabalho),
             workspaces = painel.EspacosDisponiveis.Select(Espaco).ToList(),
+            projetos = painel.Projetos.Select(pr => new
+            {
+                id = pr.ProjetoId,
+                nome = pr.Nome,
+                slug = pr.IdentificadorSlug,
+                criadoEm = pr.CriadoEm
+            }).ToList(),
             propostas = painel.Propostas.Select(p =>
             {
                 var vigente = painel.DecisoesPorTopico.GetValueOrDefault(p.TopicoId);
@@ -319,6 +326,80 @@ public sealed class WebReviewHandler
             c.Guid("workspaceId"), c.Guid("projectId"), c.Guid("topicId"),
             c.Inteiro("versionToRestore"), c.Inteiro("expectedVersion"), c.Texto("idempotencyKey")), contexto.RequestAborted);
         return new { topicId = r.TopicoId, proposalId = r.PropostaId, streamVersion = r.VersaoFluxo, status = r.Situacao };
+    });
+
+    public Task HandleTimelineAsync(HttpContext contexto) => ExecutarAsync(contexto, exigirCsrf: false, async ator =>
+    {
+        if (!Guid.TryParse(contexto.Request.Query["workspaceId"], out var ws)
+            || !Guid.TryParse(contexto.Request.Query["projectId"], out var proj)
+            || !Guid.TryParse(contexto.Request.Query["streamId"], out var streamId))
+            throw new ExcecaoDeValidacao("Parâmetros 'workspaceId', 'projectId' e 'streamId' são obrigatórios (UUID).");
+
+        var kind = contexto.Request.Query["kind"].ToString();
+        if (string.IsNullOrWhiteSpace(kind))
+            kind = "decision";
+        int? atVersion = int.TryParse(contexto.Request.Query["atVersion"], out var av) ? av : null;
+        var limit = int.TryParse(contexto.Request.Query["limit"], out var lim) ? lim : 50;
+
+        var r = await _servico.ObterLinhaDoTempoAsync(ator, new Core.Consultas.ConsultaLinhaDoTempo(ws, proj, kind, streamId, atVersion, null, limit), contexto.RequestAborted);
+        contexto.Response.Headers.CacheControl = "no-store";
+
+        return new
+        {
+            kind = r.TipoRegistro,
+            streamId = r.FluxoId,
+            currentStreamVersion = r.VersaoFluxoAtual,
+            targetVersion = r.VersaoAlvo,
+            events = r.Eventos.Select(e => new
+            {
+                eventId = e.EventoId,
+                streamVersion = e.VersaoFluxo,
+                type = e.Tipo,
+                recordedAt = e.RegistradoEm,
+                authorSubject = e.AutorSujeito,
+                clientId = e.ClienteId,
+                payloadId = e.CargaId,
+                refEventId = e.EventoReferenciaId,
+                reason = e.Motivo
+            }).ToList(),
+            nextBeforeVersion = r.ProximaVersaoAnterior
+        };
+    });
+
+    public Task HandleReceiptAsync(HttpContext contexto) => ExecutarAsync(contexto, exigirCsrf: false, async ator =>
+    {
+        if (!Guid.TryParse(contexto.Request.Query["workspaceId"], out var ws)
+            || !Guid.TryParse(contexto.Request.Query["projectId"], out var proj)
+            || !Guid.TryParse(contexto.Request.Query["queryId"], out var queryId))
+            throw new ExcecaoDeValidacao("Parâmetros 'workspaceId', 'projectId' e 'queryId' são obrigatórios (UUID).");
+
+        var c = await _servico.ObterComprovanteAsync(ator, ws, proj, queryId, contexto.RequestAborted);
+        contexto.Response.Headers.CacheControl = "no-store";
+
+        return new
+        {
+            queryId = c.ConsultaId,
+            workspaceId = c.EspacoTrabalhoId,
+            projectId = c.ProjetoId,
+            principalId = c.PrincipalId,
+            principalIssuer = c.PrincipalEmissor,
+            clientId = c.ClienteId,
+            searchMode = c.ModoBusca,
+            createdAt = c.CriadoEm,
+            digest = c.Digest,
+            digestAlgorithm = "sha256",
+            integrityVerified = c.IntegridadeVerificada,
+            items = c.Itens.Select(i => new
+            {
+                position = i.Posicao,
+                recordType = i.TipoRegistro,
+                streamId = i.FluxoId,
+                recordId = i.RegistroId,
+                recordVersion = i.VersaoRegistro,
+                streamVersion = i.VersaoFluxo,
+                status = i.Situacao
+            }).ToList()
+        };
     });
 
     // Métodos auxiliares

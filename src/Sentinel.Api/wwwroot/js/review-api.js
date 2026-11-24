@@ -1,11 +1,8 @@
-// Acesso HTTP do painel de revisão (sessão por cookie + header CSRF).
+// Acesso HTTP do painel de revisão e administração (sessão por cookie + header CSRF).
 
 const CABECALHO_CSRF_PADRAO = 'X-CSRF-Token';
 const NOME_CABECALHO_VALIDO = /^[A-Za-z0-9-]+$/;
 
-/**
- * Lê o workspaceId da querystring da página atual (ou null).
- */
 export function obterWorkspaceIdDaUrl() {
     try {
         const valor = new URLSearchParams(window.location.search).get('workspaceId');
@@ -15,16 +12,10 @@ export function obterWorkspaceIdDaUrl() {
     }
 }
 
-/**
- * Redireciona para o login preservando a página atual como returnUrl.
- */
 export function redirecionarParaLogin() {
     window.location.href = '/auth/login?returnUrl=' + encodeURIComponent(window.location.pathname + window.location.search);
 }
 
-/**
- * Lê o corpo de erro `{ code, message }` sem lançar exceção se não for JSON.
- */
 export async function lerErro(resposta) {
     try {
         const corpo = await resposta.json();
@@ -35,17 +26,12 @@ export async function lerErro(resposta) {
             };
         }
     } catch (e) {
-        // corpo vazio ou não-JSON
+        // Corpo não JSON
     }
     return { code: null, message: null };
 }
 
-/**
- * GET /api/review/state. Retorna { status, ok, dados, erro }.
- * Lança apenas em falha de rede.
- */
-export async function buscarEstadoRevisao(workspaceId) {
-    const url = '/api/review/state' + (workspaceId ? '?workspaceId=' + encodeURIComponent(workspaceId) : '');
+async function buscarJson(url) {
     const resposta = await fetch(url, {
         method: 'GET',
         credentials: 'same-origin',
@@ -54,15 +40,30 @@ export async function buscarEstadoRevisao(workspaceId) {
     });
 
     if (resposta.ok) {
-        const dados = await resposta.json();
-        return { status: resposta.status, ok: true, dados, erro: null };
+        return { status: resposta.status, ok: true, dados: await resposta.json(), erro: null };
     }
     return { status: resposta.status, ok: false, dados: null, erro: await lerErro(resposta) };
 }
 
-/**
- * Monta os headers CSRF a partir do objeto `csrf` do estado.
- */
+export function buscarEstadoRevisao(workspaceId) {
+    const url = '/api/review/state' + (workspaceId ? '?workspaceId=' + encodeURIComponent(workspaceId) : '');
+    return buscarJson(url);
+}
+
+export function buscarLinhaDoTempo(workspaceId, projectId, kind, streamId) {
+    const params = new URLSearchParams({ workspaceId, projectId, kind, streamId });
+    return buscarJson('/api/review/timeline?' + params.toString());
+}
+
+export function buscarComprovante(workspaceId, projectId, queryId) {
+    const params = new URLSearchParams({ workspaceId, projectId, queryId });
+    return buscarJson('/api/review/receipt?' + params.toString());
+}
+
+export function buscarDetalhesWorkspaceAdmin(workspaceId) {
+    return buscarJson('/api/admin/workspaces/' + encodeURIComponent(workspaceId));
+}
+
 export function cabecalhosCsrf(csrf) {
     const nome = csrf && typeof csrf.headerName === 'string' && NOME_CABECALHO_VALIDO.test(csrf.headerName)
         ? csrf.headerName
@@ -71,23 +72,23 @@ export function cabecalhosCsrf(csrf) {
     return { [nome]: token };
 }
 
-/**
- * POST JSON autenticado por cookie de sessão + CSRF. Retorna { status, ok, corpo, erro }.
- * Lança apenas em falha de rede.
- */
-export async function postarJson(url, corpo, csrf) {
-    const resposta = await fetch(url, {
-        method: 'POST',
+async function enviarJson(metodo, url, corpo, csrf) {
+    const headers = {
+        Accept: 'application/json',
+        ...cabecalhosCsrf(csrf)
+    };
+    const init = {
+        method: metodo,
         credentials: 'same-origin',
         cache: 'no-store',
-        headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            ...cabecalhosCsrf(csrf)
-        },
-        body: JSON.stringify(corpo)
-    });
+        headers
+    };
+    if (corpo !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        init.body = JSON.stringify(corpo);
+    }
 
+    const resposta = await fetch(url, init);
     if (resposta.ok) {
         let dados = null;
         try {
@@ -100,9 +101,22 @@ export async function postarJson(url, corpo, csrf) {
     return { status: resposta.status, ok: false, corpo: null, erro: await lerErro(resposta) };
 }
 
-/**
- * POST /auth/logout. Considera sucesso 2xx, redirecionamento (302) ou 401 (sessão já encerrada).
- */
+export function postarJson(url, corpo, csrf) {
+    return enviarJson('POST', url, corpo, csrf);
+}
+
+export function criarProjetoAdmin(workspaceId, nome, slug, csrf) {
+    return enviarJson('POST', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/projects`, { name: nome, slug }, csrf);
+}
+
+export function configurarVinculoAdmin(workspaceId, issuer, subject, role, isActive, csrf) {
+    return enviarJson('POST', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/memberships`, { issuer, subject, role, isActive }, csrf);
+}
+
+export function removerVinculoAdmin(workspaceId, membershipId, csrf) {
+    return enviarJson('DELETE', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/memberships/${encodeURIComponent(membershipId)}`, undefined, csrf);
+}
+
 export async function encerrarSessao(csrf) {
     const resposta = await fetch('/auth/logout', {
         method: 'POST',

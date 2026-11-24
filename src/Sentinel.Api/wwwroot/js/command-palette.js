@@ -127,9 +127,15 @@ export class CommandPalette {
         });
         pool.push({
             group: 'Navegação',
-            title: 'Ir para Integrações MCP',
+            title: 'Ir para Integrações & Agentes MCP',
             icon: Icons.mcp,
             action: () => appStore.set('activeView', 'mcp')
+        });
+        pool.push({
+            group: 'Navegação',
+            title: 'Ir para Administração do Workspace',
+            icon: Icons.admin,
+            action: () => appStore.set('activeView', 'admin')
         });
         pool.push({
             group: 'Navegação',

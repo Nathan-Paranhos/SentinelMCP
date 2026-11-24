@@ -74,10 +74,23 @@ public sealed record HistoricoDoFluxo(
     Dictionary<Guid, CargaMemoria> Cargas
 );
 
+public sealed record EspacoComProjetos(
+    EspacoTrabalho EspacoTrabalho,
+    PapelUsuario Papel,
+    List<Projeto> Projetos
+);
+
+public sealed record DetalhesEspacoTrabalho(
+    EspacoTrabalho EspacoTrabalho,
+    List<Projeto> Projetos,
+    List<VinculoMembro> Vinculos
+);
+
 public sealed record PainelDeRevisao(
     EspacoTrabalho EspacoTrabalho,
     List<EspacoTrabalho> EspacosDisponiveis,
     VinculoMembro Vinculo,
+    List<Projeto> Projetos,
     List<PropostaPendente> Propostas,
     Dictionary<Guid, DecisaoAtual> DecisoesPorTopico,
     List<DecisaoAtual> DecisoesVigentes,

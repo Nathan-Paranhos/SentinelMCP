@@ -1,17 +1,26 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using Sentinel.Api.Auth;
+using Sentinel.Api.Operacao;
 using Sentinel.Core.Excecoes;
 
 namespace Sentinel.Api.Mcp;
 
-// Endpoint HTTP para MCP JSON-RPC
+// Endpoint HTTP para MCP JSON-RPC (Streamable HTTP stateless)
 public sealed class McpEndpointHandler
 {
-    public static readonly string[] VersoesSuportadas = ["2025-06-18", "2025-03-26", "2024-11-05"];
+    public static readonly string[] VersoesSuportadas = ["2025-06-18", "2025-11-25", "2025-03-26", "2024-11-05"];
+
+    public const string InstrucoesAgente =
+        "Sentinel-MCP é a memória institucional versionada desta organização. " +
+        "1) Chame `list_workspaces` se não souber workspaceId/projectId. " +
+        "2) Consulte decisões vigentes e incidentes com `query_context` antes de propor mudanças arquiteturais. " +
+        "3) Propostas criadas com `propose_decision` exigem aprovação humana em /review; agentes nunca podem autoaprovar.";
 
     private static readonly JsonSerializerOptions OpcoesJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = false
     };
 
@@ -40,7 +49,6 @@ public sealed class McpEndpointHandler
 
         if (!HttpMethods.IsPost(contexto.Request.Method))
         {
-            // Método HTTP não permitido
             contexto.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
             contexto.Response.Headers.Allow = "POST";
             return;
@@ -116,20 +124,26 @@ public sealed class McpEndpointHandler
                     var solicitada = parametros.ValueKind == JsonValueKind.Object && parametros.TryGetProperty("protocolVersion", out var pv) && pv.ValueKind == JsonValueKind.String
                         ? pv.GetString()
                         : null;
-                    // Negociação da versão do protocolo
                     var versao = solicitada != null && VersoesSuportadas.Contains(solicitada) ? solicitada : VersoesSuportadas[0];
 
                     await EscreverAsync(contexto, JsonRpcResponse.Success(id, new
                     {
                         protocolVersion = versao,
-                        capabilities = new { tools = new { listChanged = false } },
-                        serverInfo = new { name = "Sentinel-MCP", version = "0.2.0" },
-                        instructions = "Consulte decisões vigentes com query_context antes de propor mudanças. Propostas exigem aprovação humana na página de revisão."
+                        capabilities = new
+                        {
+                            tools = new { listChanged = false },
+                            resources = new { subscribe = false, listChanged = false },
+                            prompts = new { listChanged = false },
+                            logging = new { }
+                        },
+                        serverInfo = new { name = SentinelDiagnostics.ServiceName, version = SentinelDiagnostics.ServiceVersion },
+                        instructions = InstrucoesAgente
                     }));
                     break;
                 }
 
                 case "ping":
+                case "logging/setLevel":
                     await EscreverAsync(contexto, JsonRpcResponse.Success(id, new { }));
                     break;
 
@@ -158,6 +172,121 @@ public sealed class McpEndpointHandler
                     break;
                 }
 
+                case "resources/list":
+                    await EscreverAsync(contexto, JsonRpcResponse.Success(id, new
+                    {
+                        resources = McpDispatcher.AllResources.Select(r => new
+                        {
+                            uri = r.Uri,
+                            name = r.Name,
+                            title = r.Title,
+                            description = r.Description,
+                            mimeType = r.MimeType
+                        })
+                    }));
+                    break;
+
+                case "resources/templates/list":
+                    await EscreverAsync(contexto, JsonRpcResponse.Success(id, new
+                    {
+                        resourceTemplates = McpDispatcher.AllResourceTemplates.Select(t => new
+                        {
+                            uriTemplate = t.UriTemplate,
+                            name = t.Name,
+                            title = t.Title,
+                            description = t.Description,
+                            mimeType = t.MimeType
+                        })
+                    }));
+                    break;
+
+                case "resources/read":
+                {
+                    var uri = parametros.ValueKind == JsonValueKind.Object && parametros.TryGetProperty("uri", out var uriEl) && uriEl.ValueKind == JsonValueKind.String
+                        ? uriEl.GetString()
+                        : null;
+                    if (string.IsNullOrWhiteSpace(uri))
+                    {
+                        await EscreverAsync(contexto, JsonRpcResponse.CreateError(id, -32602, "Parâmetros inválidos: 'uri' é obrigatório."));
+                        return;
+                    }
+
+                    try
+                    {
+                        var (mime, conteudo) = await _despachante.ReadResourceAsync(uri, identidade, contexto.RequestAborted);
+                        await EscreverAsync(contexto, JsonRpcResponse.Success(id, new
+                        {
+                            contents = new[] { new { uri, mimeType = mime, text = conteudo } }
+                        }));
+                    }
+                    catch (ExcecaoDeDominio ex)
+                    {
+                        var codigoRpc = ex is ExcecaoDeAcessoNegado ? -32003 : -32602;
+                        await EscreverAsync(contexto, JsonRpcResponse.CreateError(id, codigoRpc, ex.Message, new { code = ex.Codigo }));
+                    }
+                    break;
+                }
+
+                case "prompts/list":
+                    await EscreverAsync(contexto, JsonRpcResponse.Success(id, new
+                    {
+                        prompts = McpDispatcher.AllPrompts.Select(pr => new
+                        {
+                            name = pr.Name,
+                            title = pr.Title,
+                            description = pr.Description,
+                            arguments = pr.Arguments.Select(arg => new
+                            {
+                                name = arg.Name,
+                                description = arg.Description,
+                                required = arg.Required
+                            })
+                        })
+                    }));
+                    break;
+
+                case "prompts/get":
+                {
+                    var nomePrompt = parametros.ValueKind == JsonValueKind.Object && parametros.TryGetProperty("name", out var nEl) && nEl.ValueKind == JsonValueKind.String
+                        ? nEl.GetString()
+                        : null;
+                    if (string.IsNullOrWhiteSpace(nomePrompt))
+                    {
+                        await EscreverAsync(contexto, JsonRpcResponse.CreateError(id, -32602, "Parâmetros inválidos: 'name' do prompt é obrigatório."));
+                        return;
+                    }
+
+                    Dictionary<string, string?>? argsPrompt = null;
+                    if (parametros.TryGetProperty("arguments", out var argsEl) && argsEl.ValueKind == JsonValueKind.Object)
+                    {
+                        argsPrompt = new Dictionary<string, string?>(StringComparer.Ordinal);
+                        foreach (var prop in argsEl.EnumerateObject())
+                            argsPrompt[prop.Name] = prop.Value.ValueKind == JsonValueKind.String ? prop.Value.GetString() : prop.Value.ToString();
+                    }
+
+                    try
+                    {
+                        var (desc, textoMsg) = McpDispatcher.GetPromptContent(nomePrompt, argsPrompt);
+                        await EscreverAsync(contexto, JsonRpcResponse.Success(id, new
+                        {
+                            description = desc,
+                            messages = new[]
+                            {
+                                new
+                                {
+                                    role = "user",
+                                    content = new { type = "text", text = textoMsg }
+                                }
+                            }
+                        }));
+                    }
+                    catch (ExcecaoDeNaoEncontrado ex)
+                    {
+                        await EscreverAsync(contexto, JsonRpcResponse.CreateError(id, -32602, ex.Message));
+                    }
+                    break;
+                }
+
                 default:
                     await EscreverAsync(contexto, JsonRpcResponse.CreateError(id, -32601, $"Método não encontrado: {metodo}"));
                     break;
@@ -165,7 +294,7 @@ public sealed class McpEndpointHandler
         }
     }
 
-    private bool OrigemPermitida(HttpContext contexto)
+    public bool OrigemPermitida(HttpContext contexto)
     {
         var origem = contexto.Request.Headers.Origin.ToString();
         if (string.IsNullOrEmpty(origem))
@@ -182,7 +311,7 @@ public sealed class McpEndpointHandler
         return ok;
     }
 
-    private string CabecalhoDesafio(HttpContext contexto)
+    public string CabecalhoDesafio(HttpContext contexto)
     {
         if (!ServicoIdentidadeAgente.JwtConfigurado(_config))
             return "Bearer realm=\"sentinel-mcp\"";

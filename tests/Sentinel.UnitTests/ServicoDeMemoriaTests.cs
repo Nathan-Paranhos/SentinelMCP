@@ -18,6 +18,8 @@ public class ServicoDeMemoriaTests
     private static readonly Ator MantenedorWeb = new(Emissor, "maintainer-alice", "web-session", CanalDeAcesso.Web);
     private static readonly Ator MantenedorViaMcp = new(Emissor, "maintainer-alice", "claude-code", CanalDeAcesso.Mcp);
     private static readonly Ator Leitor = new(Emissor, "reader-bob", "cursor", CanalDeAcesso.Mcp);
+    private static readonly Ator LeitorWeb = new(Emissor, "reader-bob", "web-session", CanalDeAcesso.Web);
+    private static readonly Ator AdminSistema = new("system", "admin-api-key", "admin-api", CanalDeAcesso.AdminSistema);
 
     private static ServicoDeMemoria NovoServico()
     {
@@ -153,5 +155,52 @@ public class ServicoDeMemoriaTests
         Assert.Null(pagina2.ProximaVersaoAnterior);
         // O estado reconstituído independe da página
         Assert.Equal(StatusDecisao.Ativa, pagina2.EstadoDecisao!.Situacao);
+    }
+
+    [Fact]
+    public async Task DescobertaDeEspacos_RetornaSomenteEspacosEProjetosAcessiveis()
+    {
+        var servico = NovoServico();
+        var espacosAgente = await servico.ObterEspacosEProjetosDaIdentidadeAsync(Agente);
+        Assert.Single(espacosAgente);
+        Assert.Equal(Ws, espacosAgente[0].EspacoTrabalho.EspacoTrabalhoId);
+        Assert.Equal(PapelUsuario.Colaborador, espacosAgente[0].Papel);
+        Assert.Contains(espacosAgente[0].Projetos, p => p.ProjetoId == Proj);
+
+        var fora = new Ator(Emissor, "nao-cadastrado", "codex", CanalDeAcesso.Mcp);
+        Assert.Empty(await servico.ObterEspacosEProjetosDaIdentidadeAsync(fora));
+    }
+
+    [Fact]
+    public async Task Administracao_RespeitaCanalAdminSistemaEEscopoDoMantenedor()
+    {
+        var servico = NovoServico();
+
+        // Criar workspace global exige canal AdminSistema
+        await Assert.ThrowsAsync<ExcecaoDeAcessoNegado>(() =>
+            servico.CriarEspacoTrabalhoAsync(MantenedorWeb, "WS Web", "ws-web"));
+
+        var criado = await servico.CriarEspacoTrabalhoAsync(AdminSistema, "WS Novo", "ws-novo");
+        Assert.Equal("ws-novo", criado.IdentificadorSlug);
+
+        // AdminSistema enxerga todos os workspaces; usuário web vê só os seus
+        Assert.True((await servico.ListarTodosEspacosAsync(AdminSistema)).Count >= 3);
+        Assert.Single(await servico.ListarTodosEspacosAsync(LeitorWeb));
+
+        // Leitor web não pode administrar projetos nem vínculos; mantenedor via MCP também é bloqueado
+        await Assert.ThrowsAsync<ExcecaoDeAcessoNegado>(() =>
+            servico.CriarProjetoAsync(LeitorWeb, Ws, "Proj Bloqueado", "proj-bloqueado"));
+        await Assert.ThrowsAsync<ExcecaoDeAcessoNegado>(() =>
+            servico.ConfigurarVinculoAsync(MantenedorViaMcp, Ws, Emissor, "codex-agent", PapelUsuario.Colaborador));
+
+        // Mantenedor não acessa detalhes de outro workspace
+        await Assert.ThrowsAsync<ExcecaoDeNaoEncontrado>(() =>
+            servico.ObterDetalhesEspacoAsync(MantenedorWeb, WsOutro));
+
+        // Mantenedor no próprio workspace cria projeto e vínculo
+        var projeto = await servico.CriarProjetoAsync(MantenedorWeb, Ws, "Proj Web", "proj-web");
+        var vinculo = await servico.ConfigurarVinculoAsync(MantenedorWeb, Ws, Emissor, "codex-agent", PapelUsuario.Colaborador);
+        Assert.Equal(Ws, projeto.EspacoTrabalhoId);
+        Assert.Equal("codex-agent", vinculo.Sujeito);
     }
 }

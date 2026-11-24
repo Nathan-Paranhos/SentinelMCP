@@ -5,6 +5,7 @@ using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.IdentityModel.Tokens;
+using ModelContextProtocol.AspNetCore;
 using Npgsql;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
@@ -18,7 +19,53 @@ using Sentinel.Core.CasosDeUso;
 using Sentinel.Core.Contratos;
 using Sentinel.Persistence.EmMemoria;
 using Sentinel.Persistence.PostgreSql;
-using ModelContextProtocol.AspNetCore;
+
+var ehStdio = args.Contains("--stdio");
+
+if (ehStdio)
+{
+    // Reaproveita ASPNETCORE_ENVIRONMENT e garante ContentRoot válido mesmo quando iniciado de outro diretório
+    var envStdio = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
+        ?? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+    var raizStdio = File.Exists(Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json"))
+        ? Directory.GetCurrentDirectory()
+        : AppContext.BaseDirectory;
+    var hostBuilder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
+    {
+        Args = args,
+        EnvironmentName = string.IsNullOrWhiteSpace(envStdio) ? null : envStdio,
+        ContentRootPath = raizStdio
+    });
+    hostBuilder.Logging.ClearProviders();
+    hostBuilder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
+
+    RegistrarPersistencia(hostBuilder.Services, hostBuilder.Configuration, hostBuilder.Environment, args);
+    hostBuilder.Services.AddSingleton<ServicoDeMemoria>();
+    hostBuilder.Services.AddSingleton<IServicoIdentidadeAgente, ServicoIdentidadeAgente>();
+    hostBuilder.Services.AddSingleton<McpDispatcher>();
+    hostBuilder.Services.AddSingleton<IdentidadeAmbienteStdio>();
+    hostBuilder.Services
+        .AddMcpServer(McpSdkAdapter.ConfigureMcpServerOptions)
+        .ConfigureSentinelMcp()
+        .WithStdioServerTransport();
+
+    var host = hostBuilder.Build();
+    await ValidarBancoInicialAsync(host.Services, hostBuilder.Configuration, hostBuilder.Environment, args, host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Sentinel.Stdio"));
+
+    var tokenStdio = ObterArgumento(args, "--token") ?? Environment.GetEnvironmentVariable("SENTINEL_MCP_TOKEN");
+    if (string.IsNullOrWhiteSpace(tokenStdio) && hostBuilder.Environment.IsDevelopment())
+        tokenStdio = "mock:agent-dev-1|read:memory,write:decision,write:incident|codex-stdio";
+
+    if (string.IsNullOrWhiteSpace(tokenStdio))
+        throw new InvalidOperationException("Modo --stdio exige token em SENTINEL_MCP_TOKEN ou --token <valor>.");
+
+    var authStdio = host.Services.GetRequiredService<IServicoIdentidadeAgente>() as ServicoIdentidadeAgente
+        ?? throw new InvalidOperationException("Serviço de identidade padrão indisponível no modo STDIO.");
+    host.Services.GetRequiredService<IdentidadeAmbienteStdio>().Atual = await authStdio.AutenticarBearerAsync(tokenStdio);
+
+    await host.RunAsync();
+    return;
+}
 
 var builder = WebApplication.CreateBuilder(args);
 var config = builder.Configuration;
@@ -63,47 +110,7 @@ builder.Services.AddOpenTelemetry()
     });
 
 // Persistência de dados
-var provedor = config["Sentinel:StorageProvider"] ?? "InMemory";
-var usarPostgres = string.Equals(provedor, "PostgreSQL", StringComparison.OrdinalIgnoreCase);
-var stringConexao = config.GetConnectionString("Database");
-var stringConexaoAdmin = config.GetConnectionString("DatabaseAdmin") ?? stringConexao;
-
-if (usarPostgres)
-{
-    if (string.IsNullOrWhiteSpace(stringConexao))
-        throw new InvalidOperationException("Sentinel:StorageProvider=PostgreSQL exige ConnectionStrings:Database (forneça por variável de ambiente ou cofre de segredos).");
-
-    var fonte = NpgsqlDataSource.Create(stringConexao);
-    var repositorio = new RepositorioSentinelPostgreSql(fonte);
-    builder.Services.AddSingleton(fonte);
-    builder.Services.AddSingleton(repositorio);
-    RegistrarRepositorio(builder.Services, repositorio);
-}
-else
-{
-    if (ambiente.IsProduction() && !config.GetValue<bool>("Sentinel:AllowInMemoryInProduction"))
-        throw new InvalidOperationException("O armazenamento InMemory não persiste dados e não é permitido em Production. Configure Sentinel:StorageProvider=PostgreSQL.");
-
-    var repositorio = new RepositorioSentinelEmMemoria();
-    if (args.Contains("--seed-demo") || config.GetValue<bool>("Sentinel:SeedDemoData"))
-        repositorio.PopularDadosDemonstracao();
-    builder.Services.AddSingleton(repositorio);
-    RegistrarRepositorio(builder.Services, repositorio);
-}
-
-static void RegistrarRepositorio<T>(IServiceCollection servicos, T repositorio) where T : class,
-    IRepositorioEspacoTrabalho, IRepositorioDecisao, IRepositorioIncidente, IRepositorioContexto,
-    IRepositorioHistorico, IReconstrutorProjecoes, IManutencaoRetencao, IVerificadorProntidao
-{
-    servicos.AddSingleton<IRepositorioEspacoTrabalho>(repositorio);
-    servicos.AddSingleton<IRepositorioDecisao>(repositorio);
-    servicos.AddSingleton<IRepositorioIncidente>(repositorio);
-    servicos.AddSingleton<IRepositorioContexto>(repositorio);
-    servicos.AddSingleton<IRepositorioHistorico>(repositorio);
-    servicos.AddSingleton<IReconstrutorProjecoes>(repositorio);
-    servicos.AddSingleton<IManutencaoRetencao>(repositorio);
-    servicos.AddSingleton<IVerificadorProntidao>(repositorio);
-}
+var provedor = RegistrarPersistencia(builder.Services, config, ambiente, args);
 
 // Autenticação
 var cookieSeguro = ambiente.IsProduction() ? CookieSecurePolicy.Always : CookieSecurePolicy.SameAsRequest;
@@ -206,16 +213,21 @@ builder.Services.AddRateLimiter(o =>
 });
 
 // Registro de serviços da aplicação
+builder.Services.AddHttpContextAccessor();
 builder.Services.AddSingleton<ServicoDeMemoria>();
 builder.Services.AddSingleton<IServicoIdentidadeAgente, ServicoIdentidadeAgente>();
 builder.Services.AddSingleton<McpDispatcher>();
 builder.Services.AddSingleton<McpEndpointHandler>();
 builder.Services.AddSingleton<AdminEndpointHandler>();
 builder.Services.AddSingleton<WebReviewHandler>();
-builder.Services.AddMcpServer().WithHttpTransport(o =>
-{
-    o.Stateless = true;
-});
+builder.Services
+    .AddMcpServer(McpSdkAdapter.ConfigureMcpServerOptions)
+    .ConfigureSentinelMcp()
+    .WithHttpTransport(o =>
+    {
+        o.Stateless = false;
+    });
+
 if (config.GetValue("Sentinel:Retention:Enabled", true))
     builder.Services.AddHostedService<ServicoRetencao>();
 
@@ -223,61 +235,8 @@ var app = builder.Build();
 var log = app.Logger;
 
 // Comandos de inicialização e migrações
-string Diretorio(string relativo) => Path.Combine(AppContext.BaseDirectory, "db", relativo);
-
-if (usarPostgres)
-{
-    var migrarAgora = args.Contains("--migrate") || config.GetValue<bool>("Sentinel:AutoMigrate");
-    if (migrarAgora)
-    {
-        var aplicadas = await new MigradorBancoDados(stringConexaoAdmin!).MigrarAsync(Diretorio("migrations"));
-        log.LogInformation("Migrações aplicadas: {Migracoes}", aplicadas.Count == 0 ? "nenhuma pendente" : string.Join(", ", aplicadas));
-
-        // Reconstrói projeções após migrações
-        if (aplicadas.Any(a => a.StartsWith("003_", StringComparison.Ordinal)))
-        {
-            await using var fonteAdmin = NpgsqlDataSource.Create(stringConexaoAdmin!);
-            await new RepositorioSentinelPostgreSql(fonteAdmin).ReconstruirProjecoesAsync();
-            log.LogInformation("Projeções reconstruídas após a migração 003.");
-        }
-
-        if (args.Contains("--migrate"))
-            return;
-    }
-
-    if (args.Contains("--seed-demo"))
-    {
-        await new MigradorBancoDados(stringConexaoAdmin!).AplicarFixturesAsync(Diretorio("fixtures"));
-        await using var fonteAdmin = NpgsqlDataSource.Create(stringConexaoAdmin!);
-        await new RepositorioSentinelPostgreSql(fonteAdmin).ReconstruirProjecoesAsync();
-        log.LogInformation("Fixtures de demonstração aplicadas e projeções reconstruídas.");
-        return;
-    }
-
-    // Valida privilégios RLS do usuário do banco
-    var (papel, ignoraRls) = await app.Services.GetRequiredService<RepositorioSentinelPostgreSql>().VerificarPrivilegiosAsync();
-    if (ignoraRls)
-    {
-        if (ambiente.IsProduction() && !config.GetValue<bool>("Sentinel:Database:AllowPrivilegedRole"))
-            throw new InvalidOperationException($"O usuário de banco '{papel}' ignora RLS (superusuário ou BYPASSRLS). Use um login membro de 'sentinel_app'.");
-        log.LogWarning("O usuário de banco {Papel} ignora RLS; o isolamento depende apenas dos filtros da aplicação. Não use em produção.", papel);
-    }
-}
-
-if (args.Contains("--rebuild-projections"))
-{
-    Guid? alvo = null;
-    var indice = Array.IndexOf(args, "--workspace-id");
-    if (indice >= 0)
-    {
-        if (indice + 1 >= args.Length || !Guid.TryParse(args[indice + 1], out var ws))
-            throw new ArgumentException("--workspace-id exige um UUID.");
-        alvo = ws;
-    }
-    await app.Services.GetRequiredService<IReconstrutorProjecoes>().ReconstruirProjecoesAsync(alvo);
-    log.LogInformation("Projeções reconstruídas ({Alvo}).", alvo?.ToString() ?? "todos os workspaces");
+if (await ExecutarComandosBancoAsync(app.Services, config, ambiente, args, log))
     return;
-}
 
 // Pipeline HTTP e middlewares
 const string PoliticaCsp =
@@ -345,11 +304,17 @@ if (ServicoIdentidadeAgente.JwtConfigurado(config))
 
 app.MapMethods("/mcp", ["GET", "POST", "DELETE"], (HttpContext ctx, McpEndpointHandler handler) => handler.HandleAsync(ctx))
     .RequireRateLimiting("mcp");
-app.MapMcp("/mcp/sse");
+
+app.UseWhen(ctx => ctx.Request.Path.StartsWithSegments("/mcp/sse"), branch =>
+{
+    branch.Use(McpSdkAdapter.AutenticarHttpAsync);
+});
+app.MapMcp("/mcp/sse").RequireRateLimiting("mcp");
 
 app.MapGet("/api/admin/workspaces", (HttpContext ctx, AdminEndpointHandler h) => h.HandleListWorkspacesAsync(ctx)).RequireRateLimiting("web");
 app.MapPost("/api/admin/workspaces", (HttpContext ctx, AdminEndpointHandler h) => h.HandleCreateWorkspaceAsync(ctx)).RequireRateLimiting("web");
 app.MapGet("/api/admin/workspaces/{workspaceId:guid}", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleGetWorkspaceAsync(ctx, workspaceId)).RequireRateLimiting("web");
+app.MapGet("/api/admin/workspaces/{workspaceId:guid}/projects", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleListProjectsAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapPost("/api/admin/workspaces/{workspaceId:guid}/projects", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleCreateProjectAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapGet("/api/admin/workspaces/{workspaceId:guid}/memberships", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleListMembershipsAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapPost("/api/admin/workspaces/{workspaceId:guid}/memberships", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleConfigureMembershipAsync(ctx, workspaceId)).RequireRateLimiting("web");
@@ -361,10 +326,152 @@ app.MapGet("/auth/login", (HttpContext ctx, WebReviewHandler h) => h.RenderLogin
 app.MapPost("/auth/dev-login", (HttpContext ctx, WebReviewHandler h) => h.HandleDevLoginAsync(ctx)).RequireRateLimiting("login");
 app.MapPost("/auth/logout", (HttpContext ctx, WebReviewHandler h) => h.HandleLogoutAsync(ctx)).RequireRateLimiting("web");
 app.MapGet("/api/review/state", (HttpContext ctx, WebReviewHandler h) => h.HandleStateAsync(ctx)).RequireRateLimiting("web");
+app.MapGet("/api/review/timeline", (HttpContext ctx, WebReviewHandler h) => h.HandleTimelineAsync(ctx)).RequireRateLimiting("web");
+app.MapGet("/api/review/receipt", (HttpContext ctx, WebReviewHandler h) => h.HandleReceiptAsync(ctx)).RequireRateLimiting("web");
 app.MapPost("/api/review/approve", (HttpContext ctx, WebReviewHandler h) => h.HandleApproveAsync(ctx)).RequireRateLimiting("web");
 app.MapPost("/api/review/reject", (HttpContext ctx, WebReviewHandler h) => h.HandleRejectAsync(ctx)).RequireRateLimiting("web");
 app.MapPost("/api/review/restore", (HttpContext ctx, WebReviewHandler h) => h.HandleRestoreAsync(ctx)).RequireRateLimiting("web");
 
 app.Run();
+
+static string RegistrarPersistencia(IServiceCollection services, IConfiguration config, IHostEnvironment ambiente, string[] args)
+{
+    var provedor = config["Sentinel:StorageProvider"] ?? "InMemory";
+    var usarPostgres = string.Equals(provedor, "PostgreSQL", StringComparison.OrdinalIgnoreCase);
+    var stringConexao = config.GetConnectionString("Database");
+
+    if (usarPostgres)
+    {
+        if (string.IsNullOrWhiteSpace(stringConexao))
+            throw new InvalidOperationException("Sentinel:StorageProvider=PostgreSQL exige ConnectionStrings:Database (forneça por variável de ambiente ou cofre de segredos).");
+
+        var fonte = NpgsqlDataSource.Create(stringConexao);
+        var repositorio = new RepositorioSentinelPostgreSql(fonte);
+        services.AddSingleton(fonte);
+        services.AddSingleton(repositorio);
+        RegistrarInterfaces(services, repositorio);
+    }
+    else
+    {
+        if (ambiente.IsProduction() && !config.GetValue<bool>("Sentinel:AllowInMemoryInProduction"))
+            throw new InvalidOperationException("O armazenamento InMemory não persiste dados e não é permitido em Production. Configure Sentinel:StorageProvider=PostgreSQL.");
+
+        var repositorio = new RepositorioSentinelEmMemoria();
+        if (args.Contains("--seed-demo") || config.GetValue<bool>("Sentinel:SeedDemoData"))
+            repositorio.PopularDadosDemonstracao();
+        services.AddSingleton(repositorio);
+        RegistrarInterfaces(services, repositorio);
+    }
+
+    return provedor;
+}
+
+static void RegistrarInterfaces<T>(IServiceCollection servicos, T repositorio) where T : class,
+    IRepositorioEspacoTrabalho, IRepositorioDecisao, IRepositorioIncidente, IRepositorioContexto,
+    IRepositorioHistorico, IReconstrutorProjecoes, IManutencaoRetencao, IVerificadorProntidao
+{
+    servicos.AddSingleton<IRepositorioEspacoTrabalho>(repositorio);
+    servicos.AddSingleton<IRepositorioDecisao>(repositorio);
+    servicos.AddSingleton<IRepositorioIncidente>(repositorio);
+    servicos.AddSingleton<IRepositorioContexto>(repositorio);
+    servicos.AddSingleton<IRepositorioHistorico>(repositorio);
+    servicos.AddSingleton<IReconstrutorProjecoes>(repositorio);
+    servicos.AddSingleton<IManutencaoRetencao>(repositorio);
+    servicos.AddSingleton<IVerificadorProntidao>(repositorio);
+}
+
+static string DiretorioDb(string relativo) => Path.Combine(AppContext.BaseDirectory, "db", relativo);
+
+static string? ObterArgumento(string[] args, string nome)
+{
+    var idx = Array.IndexOf(args, nome);
+    return idx >= 0 && idx + 1 < args.Length ? args[idx + 1] : null;
+}
+
+static async Task ValidarBancoInicialAsync(IServiceProvider services, IConfiguration config, IHostEnvironment ambiente, string[] args, ILogger log)
+{
+    var provedor = config["Sentinel:StorageProvider"] ?? "InMemory";
+    if (!string.Equals(provedor, "PostgreSQL", StringComparison.OrdinalIgnoreCase))
+        return;
+
+    var stringConexao = config.GetConnectionString("Database");
+    var stringConexaoAdmin = config.GetConnectionString("DatabaseAdmin") ?? stringConexao;
+
+    if (args.Contains("--migrate") || config.GetValue<bool>("Sentinel:AutoMigrate"))
+    {
+        var aplicadas = await new MigradorBancoDados(stringConexaoAdmin!).MigrarAsync(DiretorioDb("migrations"));
+        log.LogInformation("Migrações aplicadas: {Migracoes}", aplicadas.Count == 0 ? "nenhuma pendente" : string.Join(", ", aplicadas));
+
+        if (aplicadas.Any(a => a.StartsWith("003_", StringComparison.Ordinal)))
+        {
+            await using var fonteAdmin = NpgsqlDataSource.Create(stringConexaoAdmin!);
+            await new RepositorioSentinelPostgreSql(fonteAdmin).ReconstruirProjecoesAsync();
+            log.LogInformation("Projeções reconstruídas após a migração 003.");
+        }
+    }
+
+    var (papel, ignoraRls) = await services.GetRequiredService<RepositorioSentinelPostgreSql>().VerificarPrivilegiosAsync();
+    if (ignoraRls)
+    {
+        if (ambiente.IsProduction() && !config.GetValue<bool>("Sentinel:Database:AllowPrivilegedRole"))
+            throw new InvalidOperationException($"O usuário de banco '{papel}' ignora RLS (superusuário ou BYPASSRLS). Use um login membro de 'sentinel_app'.");
+        log.LogWarning("O usuário de banco {Papel} ignora RLS; o isolamento depende apenas dos filtros da aplicação. Não use em produção.", papel);
+    }
+}
+
+static async Task<bool> ExecutarComandosBancoAsync(IServiceProvider services, IConfiguration config, IHostEnvironment ambiente, string[] args, ILogger log)
+{
+    var provedor = config["Sentinel:StorageProvider"] ?? "InMemory";
+    var usarPostgres = string.Equals(provedor, "PostgreSQL", StringComparison.OrdinalIgnoreCase);
+    var stringConexao = config.GetConnectionString("Database");
+    var stringConexaoAdmin = config.GetConnectionString("DatabaseAdmin") ?? stringConexao;
+
+    if (usarPostgres)
+    {
+        if (args.Contains("--migrate") || config.GetValue<bool>("Sentinel:AutoMigrate"))
+        {
+            var aplicadas = await new MigradorBancoDados(stringConexaoAdmin!).MigrarAsync(DiretorioDb("migrations"));
+            log.LogInformation("Migrações aplicadas: {Migracoes}", aplicadas.Count == 0 ? "nenhuma pendente" : string.Join(", ", aplicadas));
+
+            if (aplicadas.Any(a => a.StartsWith("003_", StringComparison.Ordinal)))
+            {
+                await using var fonteAdmin = NpgsqlDataSource.Create(stringConexaoAdmin!);
+                await new RepositorioSentinelPostgreSql(fonteAdmin).ReconstruirProjecoesAsync();
+                log.LogInformation("Projeções reconstruídas após a migração 003.");
+            }
+
+            if (args.Contains("--migrate"))
+                return true;
+        }
+
+        if (args.Contains("--seed-demo"))
+        {
+            await new MigradorBancoDados(stringConexaoAdmin!).AplicarFixturesAsync(DiretorioDb("fixtures"));
+            await using var fonteAdmin = NpgsqlDataSource.Create(stringConexaoAdmin!);
+            await new RepositorioSentinelPostgreSql(fonteAdmin).ReconstruirProjecoesAsync();
+            log.LogInformation("Fixtures de demonstração aplicadas e projeções reconstruídas.");
+            return true;
+        }
+
+        await ValidarBancoInicialAsync(services, config, ambiente, args, log);
+    }
+
+    if (args.Contains("--rebuild-projections"))
+    {
+        Guid? alvo = null;
+        var indice = Array.IndexOf(args, "--workspace-id");
+        if (indice >= 0)
+        {
+            if (indice + 1 >= args.Length || !Guid.TryParse(args[indice + 1], out var ws))
+                throw new ArgumentException("--workspace-id exige um UUID.");
+            alvo = ws;
+        }
+        await services.GetRequiredService<IReconstrutorProjecoes>().ReconstruirProjecoesAsync(alvo);
+        log.LogInformation("Projeções reconstruídas ({Alvo}).", alvo?.ToString() ?? "todos os workspaces");
+        return true;
+    }
+
+    return false;
+}
 
 public partial class Program { }

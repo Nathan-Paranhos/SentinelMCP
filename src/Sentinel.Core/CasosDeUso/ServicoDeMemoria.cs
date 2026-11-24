@@ -11,7 +11,8 @@ namespace Sentinel.Core.CasosDeUso;
 public enum CanalDeAcesso
 {
     Mcp,
-    Web
+    Web,
+    AdminSistema
 }
 
 // Identidade autenticada
@@ -111,6 +112,30 @@ public sealed class ServicoDeMemoria
         // Exige canal web para operações de revisão
         if (ator.Canal != CanalDeAcesso.Web)
             throw new ExcecaoDeAcessoNegado("Revisão de decisões exige sessão web humana; credenciais MCP não são aceitas.");
+    }
+
+    private static void ExigirAdminSistema(Ator ator)
+    {
+        if (ator.Canal != CanalDeAcesso.AdminSistema)
+            throw new ExcecaoDeAcessoNegado("Esta operação administrativa exige chave de administração (ADMIN_API_KEY).");
+    }
+
+    private async Task ExigirAdminSistemaOuMantenedorAsync(Ator ator, Guid espacoTrabalhoId, CancellationToken ct)
+    {
+        if (ator.Canal == CanalDeAcesso.AdminSistema)
+        {
+            if (await _espacos.ObterEspacoTrabalhoAsync(espacoTrabalhoId, ct) == null)
+                throw new ExcecaoDeNaoEncontrado($"Workspace {espacoTrabalhoId} não encontrado.");
+            return;
+        }
+
+        if (ator.Canal == CanalDeAcesso.Web)
+        {
+            await ExigirVinculoAsync(espacoTrabalhoId, ator, PapelUsuario.Mantenedor, ct);
+            return;
+        }
+
+        throw new ExcecaoDeAcessoNegado("Credenciais MCP não podem administrar workspaces ou vínculos.");
     }
 
     public async Task<ResultadoProporDecisao> ProporDecisaoAsync(Ator ator, EntradaProporDecisao e, CancellationToken ct = default)
@@ -329,6 +354,7 @@ public sealed class ServicoDeMemoria
         var vinculo = await ExigirVinculoAsync(espaco.EspacoTrabalhoId, ator, PapelUsuario.Leitor, ct);
         var id = espaco.EspacoTrabalhoId;
 
+        var projetos = await _espacos.ObterProjetosPorEspacoTrabalhoAsync(id, ct);
         var propostas = await _decisoes.ObterPropostasPendentesAsync(id, ct: ct);
         var decisoes = await _decisoes.ObterDecisoesAsync(id, ct: ct);
         var vigentes = decisoes.Where(d => d.Situacao == StatusDecisao.Ativa && d.RegistroAtivoId != null).ToList();
@@ -336,14 +362,47 @@ public sealed class ServicoDeMemoria
         var eventos = await _decisoes.ObterEventosRecentesAsync(id, 50, ct);
 
         return new PainelDeRevisao(
-            espaco, espacos, vinculo, propostas,
+            espaco, espacos, vinculo, projetos, propostas,
             decisoes.ToDictionary(d => d.TopicoId),
             vigentes, incidentes, eventos);
     }
 
+    // Lista workspaces e projetos acessíveis à identidade autenticada
+    public async Task<List<EspacoComProjetos>> ObterEspacosEProjetosDaIdentidadeAsync(Ator ator, CancellationToken ct = default)
+    {
+        var espacos = await _espacos.ObterEspacosDaIdentidadeAsync(ator.Emissor, ator.Sujeito, ct);
+        var resultado = new List<EspacoComProjetos>(espacos.Count);
+
+        foreach (var espaco in espacos)
+        {
+            var vinculo = await _espacos.ObterVinculoMembroAsync(espaco.EspacoTrabalhoId, ator.Emissor, ator.Sujeito, ct);
+            if (vinculo == null || !vinculo.Ativo)
+                continue;
+
+            var projetos = await _espacos.ObterProjetosPorEspacoTrabalhoAsync(espaco.EspacoTrabalhoId, ct);
+            resultado.Add(new EspacoComProjetos(espaco, vinculo.Papel, projetos));
+        }
+
+        return resultado;
+    }
+
+    public async Task<List<DecisaoAtual>> ListarDecisoesVigentesDoProjetoAsync(Ator ator, Guid espacoTrabalhoId, Guid projetoId, CancellationToken ct = default)
+    {
+        await ExigirVinculoAsync(espacoTrabalhoId, ator, PapelUsuario.Leitor, ct);
+        await ExigirProjetoAsync(espacoTrabalhoId, projetoId, ct);
+        return await _decisoes.ObterDecisoesVigentesAsync(espacoTrabalhoId, projetoId, ct);
+    }
+
+    public async Task<List<IncidenteAtual>> ListarIncidentesDoProjetoAsync(Ator ator, Guid espacoTrabalhoId, Guid projetoId, CancellationToken ct = default)
+    {
+        await ExigirVinculoAsync(espacoTrabalhoId, ator, PapelUsuario.Leitor, ct);
+        await ExigirProjetoAsync(espacoTrabalhoId, projetoId, ct);
+        return await _incidentes.ObterIncidentesAsync(espacoTrabalhoId, projetoId, ct);
+    }
+
     public async Task<EspacoTrabalho> CriarEspacoTrabalhoAsync(Ator ator, string nome, string slug, Guid? espacoTrabalhoId = null, CancellationToken ct = default)
     {
-        ExigirCanalWeb(ator);
+        ExigirAdminSistema(ator);
         if (string.IsNullOrWhiteSpace(nome) || nome.Length > 120)
             throw new ExcecaoDeValidacao("Nome do workspace deve ter entre 1 e 120 caracteres.");
         ValidadorDeInvariantes.ValidarSlug(slug, "slug do workspace");
@@ -353,16 +412,41 @@ public sealed class ServicoDeMemoria
 
     public async Task<List<EspacoTrabalho>> ListarTodosEspacosAsync(Ator ator, CancellationToken ct = default)
     {
+        if (ator.Canal == CanalDeAcesso.AdminSistema)
+            return await _espacos.ListarTodosEspacosAsync(ct);
+
         ExigirCanalWeb(ator);
-        return await _espacos.ListarTodosEspacosAsync(ct);
+        return await _espacos.ObterEspacosDaIdentidadeAsync(ator.Emissor, ator.Sujeito, ct);
+    }
+
+    public async Task<DetalhesEspacoTrabalho> ObterDetalhesEspacoAsync(Ator ator, Guid espacoTrabalhoId, CancellationToken ct = default)
+    {
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
+        var espaco = await _espacos.ObterEspacoTrabalhoAsync(espacoTrabalhoId, ct)
+            ?? throw new ExcecaoDeNaoEncontrado($"Workspace {espacoTrabalhoId} não encontrado.");
+        var projetos = await _espacos.ObterProjetosPorEspacoTrabalhoAsync(espacoTrabalhoId, ct);
+        var vinculos = await _espacos.ListarVinculosDoEspacoAsync(espacoTrabalhoId, ct);
+        return new DetalhesEspacoTrabalho(espaco, projetos, vinculos);
+    }
+
+    public async Task<List<Projeto>> ListarProjetosDoEspacoAsync(Ator ator, Guid espacoTrabalhoId, CancellationToken ct = default)
+    {
+        if (ator.Canal == CanalDeAcesso.AdminSistema)
+        {
+            if (await _espacos.ObterEspacoTrabalhoAsync(espacoTrabalhoId, ct) == null)
+                throw new ExcecaoDeNaoEncontrado($"Workspace {espacoTrabalhoId} não encontrado.");
+        }
+        else
+        {
+            await ExigirVinculoAsync(espacoTrabalhoId, ator, PapelUsuario.Leitor, ct);
+        }
+
+        return await _espacos.ObterProjetosPorEspacoTrabalhoAsync(espacoTrabalhoId, ct);
     }
 
     public async Task<Projeto> CriarProjetoAsync(Ator ator, Guid espacoTrabalhoId, string nome, string slug, Guid? projetoId = null, CancellationToken ct = default)
     {
-        ExigirCanalWeb(ator);
-        var ws = await _espacos.ObterEspacoTrabalhoAsync(espacoTrabalhoId, ct)
-            ?? throw new ExcecaoDeNaoEncontrado($"Workspace {espacoTrabalhoId} não encontrado.");
-
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
         if (string.IsNullOrWhiteSpace(nome) || nome.Length > 120)
             throw new ExcecaoDeValidacao("Nome do projeto deve ter entre 1 e 120 caracteres.");
         ValidadorDeInvariantes.ValidarSlug(slug, "slug do projeto");
@@ -372,10 +456,7 @@ public sealed class ServicoDeMemoria
 
     public async Task<VinculoMembro> ConfigurarVinculoAsync(Ator ator, Guid espacoTrabalhoId, string emissor, string sujeito, PapelUsuario papel, bool ativo = true, CancellationToken ct = default)
     {
-        ExigirCanalWeb(ator);
-        var ws = await _espacos.ObterEspacoTrabalhoAsync(espacoTrabalhoId, ct)
-            ?? throw new ExcecaoDeNaoEncontrado($"Workspace {espacoTrabalhoId} não encontrado.");
-
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
         if (string.IsNullOrWhiteSpace(emissor) || !Uri.TryCreate(emissor, UriKind.Absolute, out var uriEmissor) || (uriEmissor.Scheme != "https" && uriEmissor.Scheme != "http"))
             throw new ExcecaoDeValidacao("Emissor do vínculo deve ser uma URL válida (HTTP/HTTPS).");
         if (string.IsNullOrWhiteSpace(sujeito) || sujeito.Length > 120)
@@ -386,19 +467,13 @@ public sealed class ServicoDeMemoria
 
     public async Task<List<VinculoMembro>> ListarVinculosDoEspacoAsync(Ator ator, Guid espacoTrabalhoId, CancellationToken ct = default)
     {
-        ExigirCanalWeb(ator);
-        var ws = await _espacos.ObterEspacoTrabalhoAsync(espacoTrabalhoId, ct)
-            ?? throw new ExcecaoDeNaoEncontrado($"Workspace {espacoTrabalhoId} não encontrado.");
-
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
         return await _espacos.ListarVinculosDoEspacoAsync(espacoTrabalhoId, ct);
     }
 
     public async Task<bool> RemoverVinculoAsync(Ator ator, Guid espacoTrabalhoId, Guid vinculoId, CancellationToken ct = default)
     {
-        ExigirCanalWeb(ator);
-        var ws = await _espacos.ObterEspacoTrabalhoAsync(espacoTrabalhoId, ct)
-            ?? throw new ExcecaoDeNaoEncontrado($"Workspace {espacoTrabalhoId} não encontrado.");
-
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
         return await _espacos.RemoverVinculoAsync(espacoTrabalhoId, vinculoId, ct);
     }
 }

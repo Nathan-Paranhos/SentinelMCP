@@ -11,7 +11,7 @@ function salvarTema(tema) {
     try {
         localStorage.setItem('sentinel_theme', tema);
     } catch (e) {
-        // localStorage indisponível: o tema vale apenas para esta página.
+        // Ignora indisponibilidade de localStorage
     }
 }
 
@@ -29,16 +29,21 @@ class Store {
             sidebarCollapsed: false,
             inspectorOpen: true,
             theme: lerTemaSalvo(),
-            searchTerm: '',
+            filterText: '',
+            filterProjectId: 'all',
+            timelineFilter: 'all',
+            activeMcpClient: 'codex',
+            projetos: [],
             propostas: [],
             decisoes: [],
             incidentes: [],
             eventos: [],
             workspaces: [],
             workspace: null,
-            // Preenchidos exclusivamente pelo servidor (GET /api/review/state).
             usuario: null,
-            csrf: null
+            csrf: null,
+            adminDetails: null,
+            receiptPreview: null
         };
         this.listeners = new Map();
     }
@@ -56,12 +61,9 @@ class Store {
         this.notify(key, value);
     }
 
-    /**
-     * Aplica (ou reaplica, após recarregar) o estado vindo do servidor.
-     * Mantém as seleções atuais quando o item ainda existe.
-     */
     initData(payload) {
         const dados = payload || {};
+        this.state.projetos = comoLista(dados.projetos);
         this.state.propostas = comoLista(dados.propostas);
         this.state.decisoes = comoLista(dados.decisoes);
         this.state.incidentes = comoLista(dados.incidentes);

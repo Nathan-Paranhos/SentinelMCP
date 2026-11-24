@@ -65,10 +65,33 @@ public sealed class JsonRpcError
     public object? Data { get; set; }
 }
 
+public sealed class McpToolAnnotations
+{
+    [JsonPropertyName("title")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Title { get; set; }
+
+    [JsonPropertyName("readOnlyHint")]
+    public bool ReadOnlyHint { get; set; }
+
+    [JsonPropertyName("destructiveHint")]
+    public bool DestructiveHint { get; set; }
+
+    [JsonPropertyName("idempotentHint")]
+    public bool IdempotentHint { get; set; }
+
+    [JsonPropertyName("openWorldHint")]
+    public bool OpenWorldHint { get; set; }
+}
+
 public sealed class McpToolDefinition
 {
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("title")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Title { get; set; }
 
     [JsonPropertyName("description")]
     public string Description { get; set; } = string.Empty;
@@ -79,10 +102,21 @@ public sealed class McpToolDefinition
     [JsonPropertyName("outputSchema")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object? OutputSchema { get; set; }
+
+    [JsonPropertyName("annotations")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public McpToolAnnotations? Annotations { get; set; }
 }
 
 public sealed class McpToolResult
 {
+    private static readonly JsonSerializerOptions OpcoesTextoJson = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        WriteIndented = false
+    };
+
     [JsonPropertyName("content")]
     public List<McpContentItem> Content { get; set; } = [];
 
@@ -94,8 +128,10 @@ public sealed class McpToolResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public object? StructuredContent { get; set; }
 
+    // Inclui resumo legível e JSON serializado no texto para compatibilidade com todos os clientes MCP
     public static McpToolResult Success(object structuredData, string textSummary)
     {
+        var json = JsonSerializer.Serialize(structuredData, OpcoesTextoJson);
         return new McpToolResult
         {
             IsError = false,
@@ -105,7 +141,7 @@ public sealed class McpToolResult
                 new McpContentItem
                 {
                     Type = "text",
-                    Text = textSummary
+                    Text = $"{textSummary}\n\n{json}"
                 }
             ]
         };
@@ -119,6 +155,9 @@ public sealed class McpToolResult
             message,
             details
         };
+        var texto = details == null
+            ? $"Error [{code}]: {message}"
+            : $"Error [{code}]: {message}\n{JsonSerializer.Serialize(details, OpcoesTextoJson)}";
 
         return new McpToolResult
         {
@@ -129,7 +168,7 @@ public sealed class McpToolResult
                 new McpContentItem
                 {
                     Type = "text",
-                    Text = $"Error [{code}]: {message}"
+                    Text = texto
                 }
             ]
         };
@@ -144,3 +183,28 @@ public sealed class McpContentItem
     [JsonPropertyName("text")]
     public string Text { get; set; } = string.Empty;
 }
+
+public sealed record McpPromptDefinition(
+    string Name,
+    string Title,
+    string Description,
+    List<McpPromptArgument> Arguments);
+
+public sealed record McpPromptArgument(
+    string Name,
+    string Description,
+    bool Required);
+
+public sealed record McpResourceDefinition(
+    string Uri,
+    string Name,
+    string Title,
+    string Description,
+    string MimeType);
+
+public sealed record McpResourceTemplateDefinition(
+    string UriTemplate,
+    string Name,
+    string Title,
+    string Description,
+    string MimeType);

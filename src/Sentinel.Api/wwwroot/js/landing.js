@@ -1,9 +1,9 @@
-// Comportamento da landing page: tela de loading, revelação ao rolar e indicador de rolagem.
+// Comportamento da landing page: loading, tabs de clientes MCP, cópia rápida e scroll reveal.
 (function () {
     'use strict';
 
-    var DURACAO_LOADING_MS = 1200;
-    var DURACAO_LOADING_REDUZIDA_MS = 300;
+    var DURACAO_LOADING_MS = 650;
+    var DURACAO_LOADING_REDUZIDA_MS = 180;
 
     function prefereMovimentoReduzido() {
         try {
@@ -17,9 +17,12 @@
         var tela = document.getElementById('landing-loading-screen');
         if (!tela) return;
 
+        var esconder = function () {
+            tela.classList.add('oculto');
+        };
+
         var progresso = document.getElementById('landing-loading-progress');
         if (progresso) {
-            // Dois frames garantem que a largura inicial já foi pintada e a transição CSS roda.
             window.requestAnimationFrame(function () {
                 window.requestAnimationFrame(function () {
                     progresso.style.width = '100%';
@@ -27,10 +30,9 @@
             });
         }
 
+        tela.addEventListener('click', esconder);
         var atraso = prefereMovimentoReduzido() ? DURACAO_LOADING_REDUZIDA_MS : DURACAO_LOADING_MS;
-        window.setTimeout(function () {
-            tela.classList.add('oculto');
-        }, atraso);
+        window.setTimeout(esconder, atraso);
     }
 
     function iniciarRevelacaoAoRolar() {
@@ -47,7 +49,7 @@
                     observador.unobserve(entrada.target);
                 }
             });
-        }, { threshold: 0.15 });
+        }, { threshold: 0.12 });
 
         elementos.forEach(function (el) { observador.observe(el); });
     }
@@ -57,26 +59,37 @@
         if (!janelaPreview) return;
 
         var atualizar = function () {
-            janelaPreview.classList.toggle('scrolled', window.scrollY > 60);
+            janelaPreview.classList.toggle('scrolled', window.scrollY > 50);
         };
         window.addEventListener('scroll', atualizar, { passive: true });
         atualizar();
     }
 
-    function iniciarIndicadorDeRolagem() {
-        document.querySelectorAll('[data-scroll-target]').forEach(function (indicador) {
-            var rolar = function () {
-                var alvo = document.getElementById(indicador.getAttribute('data-scroll-target'));
-                if (alvo) {
-                    alvo.scrollIntoView({ behavior: prefereMovimentoReduzido() ? 'auto' : 'smooth' });
-                }
-            };
-            indicador.addEventListener('click', rolar);
-            indicador.addEventListener('keydown', function (e) {
-                if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    rolar();
-                }
+    function iniciarTabsClientes() {
+        var botoes = document.querySelectorAll('[data-client-tab]');
+        var paineis = document.querySelectorAll('[data-client-panel]');
+        if (!botoes.length) return;
+
+        botoes.forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var alvo = btn.getAttribute('data-client-tab');
+                botoes.forEach(function (b) { b.classList.toggle('active', b.getAttribute('data-client-tab') === alvo); });
+                paineis.forEach(function (p) { p.classList.toggle('active', p.getAttribute('data-client-panel') === alvo); });
+            });
+        });
+    }
+
+    function iniciarBotoesCopia() {
+        document.querySelectorAll('[data-copy-target]').forEach(function (btn) {
+            btn.addEventListener('click', function () {
+                var id = btn.getAttribute('data-copy-target');
+                var el = id ? document.getElementById(id) : null;
+                if (!el || !navigator.clipboard) return;
+                navigator.clipboard.writeText(el.textContent || '').then(function () {
+                    var original = btn.textContent;
+                    btn.textContent = 'Copiado!';
+                    window.setTimeout(function () { btn.textContent = original; }, 1600);
+                });
             });
         });
     }
@@ -85,7 +98,8 @@
         iniciarTelaLoading();
         iniciarRevelacaoAoRolar();
         iniciarEfeitoScrollPreview();
-        iniciarIndicadorDeRolagem();
+        iniciarTabsClientes();
+        iniciarBotoesCopia();
     }
 
     if (document.readyState === 'loading') {

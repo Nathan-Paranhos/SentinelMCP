@@ -14,8 +14,8 @@ Este documento instrui agentes autônomos e desenvolvedores sobre o funcionament
   - `Redutores/`: `RedutorDeDecisao` e `RedutorDeIncidente`, única fonte das regras de projeção.
   - `Validacao/ValidadorDeInvariantes.cs`, `Modelos/`, `Comandos/`, `Consultas/`, `Excecoes/` (códigos de erro estáveis), `Comum/`.
 - `src/Sentinel.Persistence`: `EmMemoria/` (dev/testes) e `PostgreSql/` (Npgsql com SQL puro, RLS por transação, migrador com lock consultivo).
-- `src/Sentinel.Api`: `Program.cs` (composição, CLI, autenticação, pipeline), `Mcp/` (endpoint `POST /mcp` com suporte a JSON-RPC, `ModelContextProtocol.AspNetCore` e publicação de `outputSchema`), `Admin/` (API REST `/api/admin/*` para gestão de workspaces, projetos e vínculos), `Auth/` (chave de API, token mock, JWT), `WebReview/` (`/review` e `/api/review/*`), `Operacao/` (diagnósticos OpenTelemetry e job de retenção), `wwwroot/`.
-- `db/migrations` (001 schema, 002 RLS, 003 segurança/busca/integridade), `db/fixtures` (dados de demonstração), `db/docker` (criação do papel/login no compose).
+- `src/Sentinel.Api`: `Program.cs` (composição, CLI HTTP e `--stdio`, autenticação, pipeline), `Mcp/` (`POST /mcp` JSON-RPC stateless com negociação `2025-11-25`/`2025-06-18`/`2025-03-26`/`2024-11-05`, `/mcp/sse` via SDK oficial `ModelContextProtocol.AspNetCore`, `--stdio` para clientes CLI locais, `outputSchema`, `annotations`, `resources/*` e `prompts/*`), `Admin/` (API REST `/api/admin/*` para gestão de workspaces, projetos e vínculos), `Auth/` (chave de API, token mock, JWT), `WebReview/` (`/review` e `/api/review/*`, incluindo `/api/review/timeline` e `/api/review/receipt`), `Operacao/` (diagnósticos OpenTelemetry e job de retenção), `wwwroot/`.
+- `db/migrations` (001 schema, 002 RLS, 003 segurança/busca/integridade, 004 grants administrativos de escrita), `db/fixtures` (dados de demonstração), `db/docker` (criação do papel/login no compose).
 - `tests/Sentinel.UnitTests`: invariantes, redutores, idempotência e `ServicoDeMemoria`.
 - `tests/Sentinel.ContractTests`: protocolo MCP e schemas das tools.
 - `tests/Sentinel.IntegrationTests`: AC-01 a AC-08 por HTTP, contra InMemory e contra PostgreSQL via Testcontainers (inclui testes de RLS e de imutabilidade do log).
@@ -63,6 +63,9 @@ dotnet run --project src/Sentinel.Api -- --seed-demo
 # Reconstrói projeções a partir dos eventos (todos os workspaces ou um) e sai.
 dotnet run --project src/Sentinel.Api -- --rebuild-projections
 dotnet run --project src/Sentinel.Api -- --rebuild-projections --workspace-id <uuid>
+
+# Executa como servidor MCP em STDIO (ideal para integração local com Codex / Claude Code sem porta HTTP)
+dotnet run --no-build --no-launch-profile --project src/Sentinel.Api -- --stdio --token "mock:agent-dev-1|read:memory,write:decision,write:incident|codex"
 ```
 `--migrate` só tem efeito com `Sentinel:StorageProvider=PostgreSQL` (com InMemory ele é ignorado e a API sobe normalmente). Não existe endpoint HTTP de manutenção.
 
@@ -96,20 +99,29 @@ docker compose run --rm sentinel-migrate --rebuild-projections
      -H "Authorization: Bearer mock:agent-dev-1|read:memory|smoke" \
      -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1.0"}}}'
    ```
-   Resposta esperada: `protocolVersion` `2025-06-18`, `capabilities.tools` e `serverInfo.name` `Sentinel-MCP`.
-4. Liste as tools com `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` (mesmo cabeçalho): `propose_decision`, `log_incident`, `query_context`, `get_timeline`, `get_context_receipt`.
-5. Sem `Authorization` o servidor responde 401 com `WWW-Authenticate`; `GET /mcp` responde 405.
+   Resposta esperada: `protocolVersion` `2025-06-18` (ou `2025-11-25` quando solicitado), `capabilities.tools`, `capabilities.resources`, `capabilities.prompts` e `serverInfo.name` `Sentinel-MCP`.
+4. Liste as tools com `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` (mesmo cabeçalho): `propose_decision`, `log_incident`, `query_context`, `get_timeline`, `get_context_receipt`, `list_workspaces`.
+5. Teste descoberta automática por agente (ex.: OpenAI Codex) chamando `tools/call` com `{"name":"list_workspaces","arguments":{}}`.
+6. Sem `Authorization` `/mcp` e `/mcp/sse` respondem `401` com `WWW-Authenticate`; `GET /mcp` responde `405`.
 
 ## API de Administração (`/api/admin/*`)
 A API administrativa permite gerenciar workspaces, projetos e vínculos sem depender de scripts SQL diretos:
-- `GET /api/admin/workspaces`: lista todos os workspaces cadastrados.
-- `POST /api/admin/workspaces`: cria um workspace (`{ "id": "uuid", "slug": "slug-valido", "nome": "Nome" }`).
-- `POST /api/admin/workspaces/{workspaceId}/projects`: cria um projeto associado (`{ "id": "uuid", "slug": "slug-valido", "nome": "Nome" }`).
+- `GET /api/admin/workspaces`: lista workspaces (`AdminSistema` lista todos; sessão web lista apenas os que o usuário integra).
+- `POST /api/admin/workspaces`: cria um workspace (`{ "id": "uuid", "slug": "slug-valido", "nome": "Nome" }`) — exige `X-Admin-Key`.
+- `GET /api/admin/workspaces/{workspaceId}`: obtém workspace, projetos e vínculos (`X-Admin-Key` ou `Maintainer` autenticado no workspace).
+- `GET /api/admin/workspaces/{workspaceId}/projects`: lista os projetos do workspace (`X-Admin-Key` ou membro autenticado).
+- `POST /api/admin/workspaces/{workspaceId}/projects`: cria um projeto associado (`{ "name": "Nome", "slug": "slug-valido" }`) — exige CSRF quando autenticado via cookie web.
 - `GET /api/admin/workspaces/{workspaceId}/memberships`: lista os vínculos do workspace.
-- `POST /api/admin/workspaces/{workspaceId}/memberships`: cria ou atualiza um vínculo (`{ "sujeito": "agent-id", "emissor": "https://...", "papel": "Contributor"|"Maintainer"|"Reader" }`).
+- `POST /api/admin/workspaces/{workspaceId}/memberships`: cria ou atualiza um vínculo (`{ "subject": "agent-id", "issuer": "https://...", "role": "Contributor"|"Maintainer"|"Reader" }`).
 - `DELETE /api/admin/workspaces/{workspaceId}/memberships/{vinculoId}`: remove um vínculo pelo identificador.
 
-**Autenticação**: Requer o cabeçalho `X-Admin-Key: <ADMIN_API_KEY>` ou `Authorization: Bearer <ADMIN_API_KEY>` (configurado via variável de ambiente `ADMIN_API_KEY` ou `Sentinel:AdminApiKey`), ou sessão web de usuário com papel `Maintainer`.
+**Autenticação**: Requer o cabeçalho `X-Admin-Key: <ADMIN_API_KEY>` ou `Authorization: Bearer <ADMIN_API_KEY>` (configurado via variável de ambiente `ADMIN_API_KEY` ou `Sentinel:AdminApiKey`), ou sessão web de usuário com papel `Maintainer` no workspace (com `X-CSRF-Token` em mutações).
+
+## API de Revisão Humana (`/api/review/*`)
+- `GET /api/review/state`: lista workspaces, projetos, propostas pendentes, decisões vigentes, incidentes e eventos do usuário web autenticado.
+- `GET /api/review/timeline?workspaceId=&projectId=&kind=&streamId=&atVersion=&limit=`: consulta linha do tempo e eventos de uma decisão ou incidente.
+- `GET /api/review/receipt?workspaceId=&projectId=&queryId=`: verifica integridade SHA-256 de um comprovante de consulta.
+- `POST /api/review/approve` | `POST /api/review/reject` | `POST /api/review/restore`: mutações de governança que exigem sessão web de `Maintainer` e `X-CSRF-Token`.
 
 ## Observabilidade e OpenTelemetry
 - Métricas e Rastreamento distribuído (Tracing) instrumentados via pacotes oficiais do OpenTelemetry (`OpenTelemetry.Extensions.Hosting`, `OpenTelemetry.Instrumentation.AspNetCore`, `Http`, `Runtime`).

@@ -21,7 +21,7 @@
 
 - [Visão geral](#visão-geral)
 - [Arquitetura](#arquitetura)
-- [Tools MCP](#tools-mcp)
+- [Tools, Resources e Prompts MCP](#tools-resources-e-prompts-mcp)
 - [Conectando clientes MCP](#conectando-clientes-mcp)
 - [Execução local](#execução-local)
 - [Configuração e segredos](#configuração-e-segredos)
@@ -38,7 +38,7 @@
 
 ## Visão geral
 
-O **Sentinel-MCP** é um servidor MCP (*Model Context Protocol*) em C#/.NET 9 que dá a agentes de desenvolvimento (Claude Code, Cursor e outros clientes MCP) acesso às decisões arquiteturais vigentes e aos incidentes registrados de uma organização.
+O **Sentinel-MCP** é um servidor MCP (*Model Context Protocol*) em C#/.NET 9 que dá a agentes de desenvolvimento (**OpenAI Codex**, **Claude Code**, **Cursor**, **Gemini CLI**, **VS Code Copilot** e outros clientes MCP) acesso às decisões arquiteturais vigentes e aos incidentes registrados de uma organização.
 
 Problemas que ele ataca:
 
@@ -125,15 +125,24 @@ flowchart TB
 
 ---
 
-## Tools MCP
+## Tools, Resources e Prompts MCP
+
+### Ferramentas (`tools/list` / `tools/call`)
 
 | Tool | Descrição | Exige |
 | --- | --- | --- |
+| `list_workspaces` | Descobre os workspaces, papel do agente e projetos acessíveis à credencial autenticada (`readOnlyHint: true`). | escopo `read:memory` + vínculo ativo |
 | `propose_decision` | Registra uma proposta num tópico (`topicKey`), com justificativa e evidências HTTPS. Fica pendente até aprovação humana. | escopo `write:decision` + papel Contributor ou Maintainer |
 | `log_incident` | Registra um incidente (`reported`) com chaves técnicas e evidências. | escopo `write:incident` + papel Contributor ou Maintainer |
 | `query_context` | Busca decisões `active` e/ou incidentes `reported` e grava um comprovante. `kind`: `decision` (padrão), `incident` ou `both`; `limit` de 1 a 20 (padrão 10). | escopo `read:memory` + papel Reader ou superior |
 | `get_timeline` | Reconstitui o estado de um fluxo numa versão (`atVersion`, padrão: atual) e lista eventos em ordem decrescente; `limit` de 1 a 50 (padrão 20); use `nextBeforeVersion` como `beforeVersion` para a próxima página. O estado reconstituído independe da página. | escopo `read:memory` + papel Reader ou superior |
 | `get_context_receipt` | Devolve o comprovante de uma consulta: itens ordenados com versões, `digest`, `digestAlgorithm: "sha256"` e `integrityVerified` (o servidor recalcula o digest). | escopo `read:memory`; visível ao autor da consulta e a Maintainers do workspace (demais recebem `NOT_FOUND`) |
+
+Todas as 6 ferramentas publicam `inputSchema`, `outputSchema` e `annotations`, retornam `structuredContent` e incluem o JSON completo dentro de `content[0].text` para clientes que consomem apenas texto.
+
+### Resources & Prompts
+- **Resources (`resources/list`, `resources/read`)**: `sentinel://workspaces`, `sentinel://guide`, além dos templates `sentinel://workspaces/{workspaceId}/projects/{projectId}/decisions` e `sentinel://workspaces/{workspaceId}/projects/{projectId}/incidents`.
+- **Prompts (`prompts/list`, `prompts/get`)**: `consult_context_before_change`, `propose_architecture_decision` e `report_incident_rca`.
 
 Erros de tool voltam com `isError: true` e `structuredContent.code` igual a um destes códigos: `VALIDATION_ERROR`, `NOT_FOUND`, `VERSION_CONFLICT`, `PROPOSAL_PENDING`, `IDEMPOTENCY_KEY_REUSED`, `FORBIDDEN`, `UNAUTHORIZED`, `TEMPORARILY_UNAVAILABLE`, `INTERNAL_ERROR`. Em `INTERNAL_ERROR` a mensagem é genérica e traz apenas um ID de correlação; o detalhe fica no log do servidor.
 
@@ -201,7 +210,39 @@ A resposta traz `queryId`, `matchStatus` (`found` ou `none`), `searchMode` (`tex
 
 ## Conectando clientes MCP
 
-O endpoint é `POST /mcp` (Streamable HTTP em modo sem sessão, respostas JSON). **Toda requisição precisa de `Authorization: Bearer <token>`**; veja em [Credenciais de agente](#credenciais-de-agente) quais tokens são aceitos. Em desenvolvimento, use um token mock, por exemplo `mock:agent-dev-1|read:memory,write:decision,write:incident|claude-code`.
+O Sentinel-MCP oferece três modos de transporte compatíveis com qualquer cliente MCP (`2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`):
+- **`POST /mcp`** — Streamable HTTP stateless JSON-RPC (recomendado).
+- **`/mcp/sse`** — Endpoint HTTP stateful via SDK oficial `ModelContextProtocol.AspNetCore`.
+- **`--stdio`** — Transporte local via CLI (`dotnet run --no-build --project src/Sentinel.Api -- --stdio`).
+
+**Toda requisição HTTP precisa de `Authorization: Bearer <token>`**; veja em [Credenciais de agente](#credenciais-de-agente) quais tokens são aceitos. Em desenvolvimento, use um token mock, por exemplo `mock:agent-dev-1|read:memory,write:decision,write:incident|codex`. Veja o guia completo em [docs/guides/conectando-agentes-mcp.md](docs/guides/conectando-agentes-mcp.md).
+
+### OpenAI Codex (`codex-cli` e Extensão VS Code)
+
+Via CLI com HTTP:
+```powershell
+$env:SENTINEL_MCP_TOKEN = "mock:agent-dev-1|read:memory,write:decision,write:incident|codex"
+codex mcp add sentinel --url http://localhost:5000/mcp --bearer-token-env-var SENTINEL_MCP_TOKEN
+```
+
+No Windows/VS Code (ou quando a extensão não herda variáveis do terminal), prefira declarar o header explícito em `~/.codex/config.toml` (`%USERPROFILE%\.codex\config.toml`):
+```toml
+[mcp_servers.sentinel]
+url = "http://localhost:5000/mcp"
+
+[mcp_servers.sentinel.http_headers]
+Authorization = "Bearer mock:agent-dev-1|read:memory,write:decision,write:incident|codex"
+```
+
+Ou via **STDIO** no `~/.codex/config.toml` (sem depender de porta HTTP):
+```toml
+[mcp_servers.sentinel]
+command = "dotnet"
+args = ["run", "--no-build", "--no-launch-profile", "--project", "./src/Sentinel.Api", "--", "--stdio", "--token", "mock:agent-dev-1|read:memory,write:decision,write:incident|codex"]
+
+[mcp_servers.sentinel.env]
+ASPNETCORE_ENVIRONMENT = "Development"
+```
 
 ### Claude Code
 
@@ -226,15 +267,22 @@ Em `.cursor/mcp.json`:
 }
 ```
 
+### Gemini CLI e VS Code Copilot
+
+- **Gemini CLI** (`~/.gemini/settings.json`): configure `httpUrl: "http://localhost:5000/mcp"` e `headers.Authorization`.
+- **VS Code** (`.vscode/mcp.json`): configure `type: "http"`, `url: "http://localhost:5000/mcp"` e `headers.Authorization` com `input` seguro.
+
+Exemplos completos e diagnóstico em [docs/guides/conectando-agentes-mcp.md](docs/guides/conectando-agentes-mcp.md).
+
 Não versione arquivos com tokens reais. O servidor não implementa fluxo OAuth próprio: quando JWT está configurado, o cliente obtém o token no provedor de identidade e o envia no cabeçalho.
 
 ---
 
 ## Execução local
 
-Pré-requisitos: .NET 9 SDK; Docker (para o compose e para os testes de PostgreSQL).
+Pré-requisitos: .NET 9 SDK (ou .NET 10 com roll-forward); Docker (para o compose e para os testes de PostgreSQL).
 
-> **Ambiente:** o projeto não tem `launchSettings.json`, então `dotnet run` sobe em **Production** por padrão, onde o armazenamento padrão é PostgreSQL e a API recusa iniciar sem `ConnectionStrings:Database`. Para desenvolvimento, defina `ASPNETCORE_ENVIRONMENT=Development`.
+> **Ambiente:** em uso direto via `dotnet run` sem perfil de launch (`--no-launch-profile`) ou binário publicado, o ambiente padrão do ASP.NET Core é **Production**, que exige PostgreSQL (`ConnectionStrings:Database`). No repositório há `src/Sentinel.Api/Properties/launchSettings.json` definindo `ASPNETCORE_ENVIRONMENT=Development` e `http://localhost:5000`, mas exportar a variável explicitamente garante previsibilidade em qualquer shell.
 
 ### Opção 1: InMemory (Development)
 
@@ -303,10 +351,11 @@ Sempre separe os argumentos da aplicação com `--` no `dotnet run`. Na imagem D
 | Comando | Efeito |
 | --- | --- |
 | `dotnet run --project src/Sentinel.Api -- --migrate` | Só com `Sentinel:StorageProvider=PostgreSQL`. Aplica migrações pendentes de `db/migrations` com a conexão admin, sob lock consultivo; se aplicou a `003`, reconstrói as projeções. Depois **sai**. |
-| `dotnet run --project src/Sentinel.Api -- --seed-demo` | InMemory: popula os dados de demonstração. PostgreSQL: aplica `db/fixtures` com a conexão admin e reconstrói projeções. Depois **continua rodando** a API. |
+| `dotnet run --project src/Sentinel.Api -- --seed-demo` | InMemory: popula os dados de demonstração e mantém a API no ar. PostgreSQL: aplica `db/fixtures` com a conexão admin, reconstrói projeções e **sai** com código `0`. |
 | `dotnet run --project src/Sentinel.Api -- --rebuild-projections [--workspace-id <uuid>]` | Reconstrói as projeções a partir dos eventos (todos os workspaces ou um) e **sai**. Usa `ConnectionStrings:Database`. |
+| `dotnet run --no-build --no-launch-profile --project src/Sentinel.Api -- --stdio [--token <valor>]` | Executa o servidor MCP via entrada/saída padrão (STDIO) usando o SDK oficial; logs vão para `stderr` (`--no-launch-profile` evita ruído no `stdout`). Ideal para `codex` e clientes CLI locais. |
 
-Não existe endpoint HTTP de manutenção (não há `/ops/...` nem chave administrativa). `Sentinel:AutoMigrate=true` migra na subida da API, mas exige que o processo da API tenha a conexão admin; não é recomendado em produção.
+`Sentinel:AutoMigrate=true` migra na subida da API, mas exige que o processo da API tenha a conexão admin; não é recomendado em produção. Para automações administrativas existem os endpoints autenticados em `/api/admin/*`.
 
 ---
 
@@ -489,12 +538,13 @@ Implementados em `tests/Sentinel.IntegrationTests/CriteriosDeAceite.cs`. O resul
 │   ├── Sentinel.ContractTests/
 │   └── Sentinel.IntegrationTests/
 ├── db/
-│   ├── migrations/            # 001 schema, 002 RLS, 003 segurança/busca/integridade
+│   ├── migrations/            # 001 schema, 002 RLS, 003 segurança/busca/integridade, 004 grants admin
 │   ├── fixtures/              # Dados de demonstração idempotentes
 │   └── docker/                # Script de criação do papel/login no compose
 ├── docs/
 │   ├── adr/                   # Decisões de arquitetura
 │   ├── design/SDD.md          # Documento de design
+│   ├── guides/                # Guias detalhados de arquitetura e conexão (Codex, Claude, Cursor, Gemini, VS Code)
 │   └── runbooks/              # Deploy, migrações e recuperação
 ├── compose.yaml
 ├── Dockerfile
@@ -502,17 +552,25 @@ Implementados em `tests/Sentinel.IntegrationTests/CriteriosDeAceite.cs`. O resul
 └── AGENTS.md
 ```
 
-### Página de revisão
+### Página de revisão (`/review`) e Landing (`/`)
 
-A interface em `/review` (`src/Sentinel.Api/WebReview/review.html` + `wwwroot/js/`) lista propostas pendentes com a decisão vigente ao lado, decisões vigentes, incidentes e eventos recentes; tem paleta de comandos (`Ctrl+K` / `⌘K`) e tema claro/escuro. Os scripts são servidos de `wwwroot/js/`, sem handlers inline nem CDN. `wwwroot/index.html` é uma landing estática.
+O console web em `/review` (`src/Sentinel.Api/WebReview/review.html` + `wwwroot/js/`) oferece uma experiência completa de governança humana:
+- **Visão Geral e KPIs**: métricas ao vivo e chips copiáveis para `workspaceId` e `projectId`.
+- **Fila de Revisão com Diff Lado a Lado**: comparação direta entre a **Decisão Vigente** e a **Proposta Pendente** (título, resumo, justificativa, chaves técnicas e evidências HTTPS).
+- **Catálogo de Decisões, Histórico e Restauração**: filtros por projeto e busca instantânea, histórico de versões (`GET /api/review/timeline`) e botão de restauração (`POST /api/review/restore`) para propor reversão segura.
+- **Incidentes e Eventos Append-Only**: filtro por tipo de evento e inspeção cronológica.
+- **Hub de Integração MCP e Auditor de Recibos**: geração pronta de configuração para **OpenAI Codex**, Claude Code, Cursor, Gemini CLI e VS Code Copilot, além de verificação de integridade SHA-256 (`GET /api/review/receipt`).
+- **Administração do Workspace**: criação de projetos e gestão de vínculos/papéis diretamente na interface (via `/api/admin/*` protegido por sessão de `Maintainer` + CSRF).
+
+Os scripts e folhas de estilo são servidos de `wwwroot/js/` e `wwwroot/css/`, com CSP estrita (`script-src 'self'`), paleta de comandos (`Ctrl+K` / `⌘K`) e tema claro/escuro.
 
 ---
 
 ## Recursos Administrativos e Observabilidade
 
-- **API de Administração (`/api/admin/*`)**: Gestão de workspaces, projetos e vínculos sem dependência de scripts SQL diretos. Suporta `X-Admin-Key`, Bearer token com `ADMIN_API_KEY` ou sessão web de mantenedor.
-- **OpenTelemetry**: Tracing distribuído e métricas integradas para ASP.NET Core, HttpClient, Runtime e contadores de chamadas/erros de tools MCP. Exportação OTLP via `OTEL_EXPORTER_OTLP_ENDPOINT` ou `Sentinel:OpenTelemetry:OtlpEndpoint`.
-- **SDK MCP e Schemas**: Integração com `ModelContextProtocol.AspNetCore` e publicação completa de `inputSchema` e `outputSchema` para todas as ferramentas.
+- **API de Administração (`/api/admin/*`)**: Gestão de workspaces, projetos e vínculos (`GET/POST /api/admin/workspaces`, `GET /api/admin/workspaces/{id}`, `GET/POST /api/admin/workspaces/{id}/projects`, `GET/POST/DELETE /api/admin/workspaces/{id}/memberships`). Criação de workspace exige `X-Admin-Key` / `ADMIN_API_KEY`; gestão interna aceita `X-Admin-Key` ou sessão web de `Maintainer` com CSRF.
+- **OpenTelemetry**: Tracing distribuído e métricas integradas para ASP.NET Core, HttpClient, Runtime e contadores de chamadas/erros de tools MCP (`sentinel_mcp_tool_calls_total`, `sentinel_mcp_tool_errors_total`). Exportação OTLP via `OTEL_EXPORTER_OTLP_ENDPOINT` ou `Sentinel:OpenTelemetry:OtlpEndpoint`.
+- **SDK MCP, STDIO e Schemas**: Integração com `ModelContextProtocol.AspNetCore` (`/mcp/sse` e `--stdio`), endpoint stateless `POST /mcp`, negociação de versões `2025-11-25` a `2024-11-05`, `outputSchema`, `annotations`, `resources/*` e `prompts/*`.
 - **Segurança de Conteúdo (CSP)**: CSP estrita aplicada globalmente a todas as páginas HTML servidas, sem exceções de scripts inline ou bibliotecas de terceiros via CDN.
 
 ---
@@ -529,6 +587,8 @@ A interface em `/review` (`src/Sentinel.Api/WebReview/review.html` + `wwwroot/js
 ## Documentação complementar
 
 - [AGENTS.md](AGENTS.md): comandos para agentes e desenvolvedores.
+- [docs/guides/conectando-agentes-mcp.md](docs/guides/conectando-agentes-mcp.md): guia prático para **OpenAI Codex**, Claude Code, Cursor, Gemini CLI e VS Code.
+- [docs/guides/arquitetura-e-fluxos.md](docs/guides/arquitetura-e-fluxos.md): explicação detalhada do que tem no sistema e como cada módulo funciona.
 - [docs/adr](docs/adr): decisões de arquitetura (cada ADR traz uma nota de estado da implementação quando diverge do código).
 - [docs/design/SDD.md](docs/design/SDD.md): documento de design.
 - [docs/runbooks](docs/runbooks): deploy, migrações, recuperação e reconstrução.

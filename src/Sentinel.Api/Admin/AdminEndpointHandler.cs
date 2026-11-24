@@ -1,6 +1,8 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.AspNetCore.Antiforgery;
+using Microsoft.AspNetCore.Authentication;
 using Sentinel.Api.Auth;
 using Sentinel.Core.CasosDeUso;
 using Sentinel.Core.Excecoes;
@@ -17,62 +19,78 @@ public sealed class AdminEndpointHandler
     };
 
     private readonly ServicoDeMemoria _servico;
+    private readonly IAntiforgery _antiforgery;
     private readonly IConfiguration _config;
     private readonly IHostEnvironment _ambiente;
     private readonly ILogger<AdminEndpointHandler> _log;
 
     public AdminEndpointHandler(
         ServicoDeMemoria servico,
+        IAntiforgery antiforgery,
         IConfiguration config,
         IHostEnvironment ambiente,
         ILogger<AdminEndpointHandler> log)
     {
         _servico = servico;
+        _antiforgery = antiforgery;
         _config = config;
         _ambiente = ambiente;
         _log = log;
     }
 
-    public bool Autenticado(HttpContext ctx, out Ator ator)
+    public async Task<Ator?> AutenticarAsync(HttpContext ctx, bool exigirCsrfSeCookie = false)
     {
-        // Autenticação por chave de API
+        // Autenticação por chave de API administrativa
         var chaveConfigurada = _config["Sentinel:AdminApiKey"] ?? Environment.GetEnvironmentVariable("ADMIN_API_KEY");
         if (string.IsNullOrWhiteSpace(chaveConfigurada) && !_ambiente.IsProduction())
             chaveConfigurada = "sentinel-admin-dev-key";
 
         if (!string.IsNullOrWhiteSpace(chaveConfigurada))
         {
+            var bytesChave = Encoding.UTF8.GetBytes(chaveConfigurada);
             var headerKey = ctx.Request.Headers["X-Admin-Key"].ToString();
-            if (!string.IsNullOrEmpty(headerKey) && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(headerKey), Encoding.UTF8.GetBytes(chaveConfigurada)))
-            {
-                ator = new Ator("https://auth.sentinel.dev", "admin", "admin-key", CanalDeAcesso.Web);
-                return true;
-            }
+            if (!string.IsNullOrEmpty(headerKey) && ChaveIgual(headerKey, bytesChave))
+                return new Ator("https://auth.sentinel.dev", "admin", "admin-key", CanalDeAcesso.AdminSistema);
 
             var auth = ctx.Request.Headers.Authorization.ToString();
             if (auth.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             {
                 var token = auth["Bearer ".Length..].Trim();
-                if (CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(token), Encoding.UTF8.GetBytes(chaveConfigurada)))
-                {
-                    ator = new Ator("https://auth.sentinel.dev", "admin", "admin-bearer", CanalDeAcesso.Web);
-                    return true;
-                }
+                if (!string.IsNullOrEmpty(token) && ChaveIgual(token, bytesChave))
+                    return new Ator("https://auth.sentinel.dev", "admin", "admin-bearer", CanalDeAcesso.AdminSistema);
             }
         }
 
-        // Autenticação por sessão web
-        if (ctx.User.Identity?.IsAuthenticated == true)
-        {
-            var iss = ctx.User.FindFirst("iss")?.Value ?? "https://auth.sentinel.dev";
-            var sub = ctx.User.FindFirst("sub")?.Value ?? ctx.User.Identity.Name ?? "web-user";
-            ator = new Ator(iss, sub, "web-session", CanalDeAcesso.Web);
-            return true;
-        }
+        // Bloqueia tokens Bearer comuns em rotas administrativas web
+        if (ctx.Request.Headers.Authorization.Count > 0 || ctx.Request.Headers.ContainsKey("X-Admin-Key"))
+            return null;
 
-        ator = new Ator("https://auth.sentinel.dev", "anonimo", null, CanalDeAcesso.Web);
-        return false;
+        // Autenticação por cookie da sessão web
+        var resultado = await ctx.AuthenticateAsync(EsquemasDeAutenticacao.CookieWeb);
+        if (!resultado.Succeeded || resultado.Principal == null)
+            return null;
+
+        var iss = resultado.Principal.FindFirst("iss")?.Value;
+        var sub = resultado.Principal.FindFirst("sub")?.Value;
+        if (string.IsNullOrWhiteSpace(iss) || string.IsNullOrWhiteSpace(sub))
+            return null;
+
+        if (exigirCsrfSeCookie)
+            await _antiforgery.ValidateRequestAsync(ctx);
+
+        ctx.User = resultado.Principal;
+        return new Ator(iss, sub, "web-session", CanalDeAcesso.Web);
     }
+
+    private static bool ChaveIgual(string recebida, byte[] configurada)
+    {
+        var bytesRecebida = Encoding.UTF8.GetBytes(recebida);
+        return bytesRecebida.Length == configurada.Length
+               && CryptographicOperations.FixedTimeEquals(bytesRecebida, configurada);
+    }
+
+    private static IResult NaoAutorizado() =>
+        Results.Json(new { code = "UNAUTHORIZED", message = "Credencial administrativa ausente ou inválida." }, statusCode: StatusCodes.Status401Unauthorized);
 
     private static IResult RespostaErro(ExcecaoDeDominio ex)
     {
@@ -88,11 +106,38 @@ public sealed class AdminEndpointHandler
         return Results.Json(new { code = ex.Codigo, message = ex.Message }, statusCode: status);
     }
 
-    public async Task<IResult> HandleListWorkspacesAsync(HttpContext ctx)
+    private async Task<IResult> ExecutarAsync(HttpContext ctx, bool mutacao, Func<Ator, Task<IResult>> acao)
     {
-        if (!Autenticado(ctx, out var ator))
-            return Results.Json(new { code = "UNAUTHORIZED", message = "Credencial administrativa ausente ou inválida." }, statusCode: StatusCodes.Status401Unauthorized);
+        Ator? ator;
+        try
+        {
+            ator = await AutenticarAsync(ctx, exigirCsrfSeCookie: mutacao);
+        }
+        catch (AntiforgeryValidationException ex)
+        {
+            _log.LogWarning("Validação CSRF administrativa falhou: {Motivo}", ex.Message);
+            return Results.Json(new { code = "CSRF_INVALID", message = "Token CSRF ausente ou inválido." }, statusCode: StatusCodes.Status400BadRequest);
+        }
 
+        if (ator == null)
+            return NaoAutorizado();
+
+        try
+        {
+            return await acao(ator);
+        }
+        catch (ExcecaoDeDominio ex)
+        {
+            return RespostaErro(ex);
+        }
+        catch (JsonException)
+        {
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
+        }
+    }
+
+    public Task<IResult> HandleListWorkspacesAsync(HttpContext ctx) => ExecutarAsync(ctx, mutacao: false, async ator =>
+    {
         var lista = await _servico.ListarTodosEspacosAsync(ator, ctx.RequestAborted);
         return Results.Ok(lista.Select(w => new
         {
@@ -101,145 +146,48 @@ public sealed class AdminEndpointHandler
             slug = w.IdentificadorSlug,
             createdAt = w.CriadoEm
         }));
-    }
+    });
 
     public sealed record RequisicaoCriarWorkspace(string? Name, string? Slug, Guid? WorkspaceId);
 
-    public async Task<IResult> HandleCreateWorkspaceAsync(HttpContext ctx)
+    public Task<IResult> HandleCreateWorkspaceAsync(HttpContext ctx) => ExecutarAsync(ctx, mutacao: true, async ator =>
     {
-        if (!Autenticado(ctx, out var ator))
-            return Results.Json(new { code = "UNAUTHORIZED", message = "Credencial administrativa ausente ou inválida." }, statusCode: StatusCodes.Status401Unauthorized);
+        var req = await JsonSerializer.DeserializeAsync<RequisicaoCriarWorkspace>(ctx.Request.Body, OpcoesJson, ctx.RequestAborted);
+        if (req == null)
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
 
-        try
+        var ws = await _servico.CriarEspacoTrabalhoAsync(ator, req.Name ?? string.Empty, req.Slug ?? string.Empty, req.WorkspaceId, ctx.RequestAborted);
+        _log.LogInformation("Workspace {WorkspaceId} ({Slug}) criado por {Sujeito}", ws.EspacoTrabalhoId, ws.IdentificadorSlug, ator.Sujeito);
+        return Results.Created($"/api/admin/workspaces/{ws.EspacoTrabalhoId}", new
         {
-            var req = await JsonSerializer.DeserializeAsync<RequisicaoCriarWorkspace>(ctx.Request.Body, OpcoesJson, ctx.RequestAborted);
-            if (req == null)
-                return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
+            workspaceId = ws.EspacoTrabalhoId,
+            name = ws.Nome,
+            slug = ws.IdentificadorSlug,
+            createdAt = ws.CriadoEm
+        });
+    });
 
-            var ws = await _servico.CriarEspacoTrabalhoAsync(ator, req.Name ?? string.Empty, req.Slug ?? string.Empty, req.WorkspaceId, ctx.RequestAborted);
-            _log.LogInformation("Workspace {WorkspaceId} ({Slug}) criado por {Sujeito}", ws.EspacoTrabalhoId, ws.IdentificadorSlug, ator.Sujeito);
-            return Results.Created($"/api/admin/workspaces/{ws.EspacoTrabalhoId}", new
+    public Task<IResult> HandleGetWorkspaceAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: false, async ator =>
+    {
+        var detalhes = await _servico.ObterDetalhesEspacoAsync(ator, workspaceId, ctx.RequestAborted);
+        return Results.Ok(new
+        {
+            workspace = new
             {
-                workspaceId = ws.EspacoTrabalhoId,
-                name = ws.Nome,
-                slug = ws.IdentificadorSlug,
-                createdAt = ws.CriadoEm
-            });
-        }
-        catch (ExcecaoDeDominio ex)
-        {
-            return RespostaErro(ex);
-        }
-    }
-
-    public async Task<IResult> HandleGetWorkspaceAsync(HttpContext ctx, Guid workspaceId)
-    {
-        if (!Autenticado(ctx, out var ator))
-            return Results.Json(new { code = "UNAUTHORIZED", message = "Credencial administrativa ausente ou inválida." }, statusCode: StatusCodes.Status401Unauthorized);
-
-        try
-        {
-            var ws = await _servico.ObterPainelAsync(ator, workspaceId, ctx.RequestAborted);
-            var vinculos = await _servico.ListarVinculosDoEspacoAsync(ator, workspaceId, ctx.RequestAborted);
-            return Results.Ok(new
+                workspaceId = detalhes.EspacoTrabalho.EspacoTrabalhoId,
+                name = detalhes.EspacoTrabalho.Nome,
+                slug = detalhes.EspacoTrabalho.IdentificadorSlug,
+                createdAt = detalhes.EspacoTrabalho.CriadoEm
+            },
+            projects = detalhes.Projetos.Select(p => new
             {
-                workspace = new
-                {
-                    workspaceId = ws.EspacoTrabalho.EspacoTrabalhoId,
-                    name = ws.EspacoTrabalho.Nome,
-                    slug = ws.EspacoTrabalho.IdentificadorSlug,
-                    createdAt = ws.EspacoTrabalho.CriadoEm
-                },
-                memberships = vinculos.Select(v => new
-                {
-                    membershipId = v.VinculoId,
-                    workspaceId = v.EspacoTrabalhoId,
-                    issuer = v.Emissor,
-                    subject = v.Sujeito,
-                    role = v.Papel.ParaTexto(),
-                    isActive = v.Ativo,
-                    createdAt = v.CriadoEm
-                })
-            });
-        }
-        catch (ExcecaoDeDominio ex)
-        {
-            return RespostaErro(ex);
-        }
-    }
-
-    public sealed record RequisicaoCriarProjeto(string? Name, string? Slug, Guid? ProjectId);
-
-    public async Task<IResult> HandleCreateProjectAsync(HttpContext ctx, Guid workspaceId)
-    {
-        if (!Autenticado(ctx, out var ator))
-            return Results.Json(new { code = "UNAUTHORIZED", message = "Credencial administrativa ausente ou inválida." }, statusCode: StatusCodes.Status401Unauthorized);
-
-        try
-        {
-            var req = await JsonSerializer.DeserializeAsync<RequisicaoCriarProjeto>(ctx.Request.Body, OpcoesJson, ctx.RequestAborted);
-            if (req == null)
-                return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
-
-            var proj = await _servico.CriarProjetoAsync(ator, workspaceId, req.Name ?? string.Empty, req.Slug ?? string.Empty, req.ProjectId, ctx.RequestAborted);
-            _log.LogInformation("Projeto {ProjetoId} ({Slug}) criado no workspace {WorkspaceId}", proj.ProjetoId, proj.IdentificadorSlug, workspaceId);
-            return Results.Created($"/api/admin/workspaces/{workspaceId}/projects/{proj.ProjetoId}", new
-            {
-                projectId = proj.ProjetoId,
-                workspaceId = proj.EspacoTrabalhoId,
-                name = proj.Nome,
-                slug = proj.IdentificadorSlug,
-                createdAt = proj.CriadoEm
-            });
-        }
-        catch (ExcecaoDeDominio ex)
-        {
-            return RespostaErro(ex);
-        }
-    }
-
-    public sealed record RequisicaoConfigurarVinculo(string? Issuer, string? Subject, string? Role, bool? IsActive);
-
-    public async Task<IResult> HandleConfigureMembershipAsync(HttpContext ctx, Guid workspaceId)
-    {
-        if (!Autenticado(ctx, out var ator))
-            return Results.Json(new { code = "UNAUTHORIZED", message = "Credencial administrativa ausente ou inválida." }, statusCode: StatusCodes.Status401Unauthorized);
-
-        try
-        {
-            var req = await JsonSerializer.DeserializeAsync<RequisicaoConfigurarVinculo>(ctx.Request.Body, OpcoesJson, ctx.RequestAborted);
-            if (req == null)
-                return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
-
-            var papel = ConversorDeEnumeradores.ParaPapel(req.Role ?? "Reader");
-            var vinculo = await _servico.ConfigurarVinculoAsync(ator, workspaceId, req.Issuer ?? string.Empty, req.Subject ?? string.Empty, papel, req.IsActive ?? true, ctx.RequestAborted);
-            _log.LogInformation("Vínculo configurado: {Subject} ({Papel}) no workspace {WorkspaceId}", vinculo.Sujeito, vinculo.Papel, workspaceId);
-            return Results.Ok(new
-            {
-                membershipId = vinculo.VinculoId,
-                workspaceId = vinculo.EspacoTrabalhoId,
-                issuer = vinculo.Emissor,
-                subject = vinculo.Sujeito,
-                role = vinculo.Papel.ParaTexto(),
-                isActive = vinculo.Ativo,
-                createdAt = vinculo.CriadoEm
-            });
-        }
-        catch (ExcecaoDeDominio ex)
-        {
-            return RespostaErro(ex);
-        }
-    }
-
-    public async Task<IResult> HandleListMembershipsAsync(HttpContext ctx, Guid workspaceId)
-    {
-        if (!Autenticado(ctx, out var ator))
-            return Results.Json(new { code = "UNAUTHORIZED", message = "Credencial administrativa ausente ou inválida." }, statusCode: StatusCodes.Status401Unauthorized);
-
-        try
-        {
-            var lista = await _servico.ListarVinculosDoEspacoAsync(ator, workspaceId, ctx.RequestAborted);
-            return Results.Ok(lista.Select(v => new
+                projectId = p.ProjetoId,
+                workspaceId = p.EspacoTrabalhoId,
+                name = p.Nome,
+                slug = p.IdentificadorSlug,
+                createdAt = p.CriadoEm
+            }),
+            memberships = detalhes.Vinculos.Select(v => new
             {
                 membershipId = v.VinculoId,
                 workspaceId = v.EspacoTrabalhoId,
@@ -248,31 +196,90 @@ public sealed class AdminEndpointHandler
                 role = v.Papel.ParaTexto(),
                 isActive = v.Ativo,
                 createdAt = v.CriadoEm
-            }));
-        }
-        catch (ExcecaoDeDominio ex)
-        {
-            return RespostaErro(ex);
-        }
-    }
+            })
+        });
+    });
 
-    public async Task<IResult> HandleRemoveMembershipAsync(HttpContext ctx, Guid workspaceId, Guid membershipId)
+    public Task<IResult> HandleListProjectsAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: false, async ator =>
     {
-        if (!Autenticado(ctx, out var ator))
-            return Results.Json(new { code = "UNAUTHORIZED", message = "Credencial administrativa ausente ou inválida." }, statusCode: StatusCodes.Status401Unauthorized);
-
-        try
+        var projetos = await _servico.ListarProjetosDoEspacoAsync(ator, workspaceId, ctx.RequestAborted);
+        return Results.Ok(projetos.Select(p => new
         {
-            var removido = await _servico.RemoverVinculoAsync(ator, workspaceId, membershipId, ctx.RequestAborted);
-            if (!removido)
-                return Results.NotFound(new { code = "NOT_FOUND", message = $"Vínculo {membershipId} não encontrado no workspace." });
+            projectId = p.ProjetoId,
+            workspaceId = p.EspacoTrabalhoId,
+            name = p.Nome,
+            slug = p.IdentificadorSlug,
+            createdAt = p.CriadoEm
+        }));
+    });
 
-            _log.LogInformation("Vínculo {MembershipId} removido do workspace {WorkspaceId}", membershipId, workspaceId);
-            return Results.Ok(new { success = true, removedMembershipId = membershipId });
-        }
-        catch (ExcecaoDeDominio ex)
+    public sealed record RequisicaoCriarProjeto(string? Name, string? Slug, Guid? ProjectId);
+
+    public Task<IResult> HandleCreateProjectAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: true, async ator =>
+    {
+        var req = await JsonSerializer.DeserializeAsync<RequisicaoCriarProjeto>(ctx.Request.Body, OpcoesJson, ctx.RequestAborted);
+        if (req == null)
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
+
+        var proj = await _servico.CriarProjetoAsync(ator, workspaceId, req.Name ?? string.Empty, req.Slug ?? string.Empty, req.ProjectId, ctx.RequestAborted);
+        _log.LogInformation("Projeto {ProjetoId} ({Slug}) criado no workspace {WorkspaceId}", proj.ProjetoId, proj.IdentificadorSlug, workspaceId);
+        return Results.Created($"/api/admin/workspaces/{workspaceId}/projects/{proj.ProjetoId}", new
         {
-            return RespostaErro(ex);
-        }
-    }
+            projectId = proj.ProjetoId,
+            workspaceId = proj.EspacoTrabalhoId,
+            name = proj.Nome,
+            slug = proj.IdentificadorSlug,
+            createdAt = proj.CriadoEm
+        });
+    });
+
+    public sealed record RequisicaoConfigurarVinculo(string? Issuer, string? Subject, string? Role, bool? IsActive);
+
+    public Task<IResult> HandleConfigureMembershipAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: true, async ator =>
+    {
+        var req = await JsonSerializer.DeserializeAsync<RequisicaoConfigurarVinculo>(ctx.Request.Body, OpcoesJson, ctx.RequestAborted);
+        if (req == null)
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
+
+        if (!ConversorDeEnumeradores.TentarConverterPapel(req.Role ?? "Reader", out var papel))
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Papel inválido. Valores aceitos: Reader, Contributor, Maintainer." });
+
+        var vinculo = await _servico.ConfigurarVinculoAsync(ator, workspaceId, req.Issuer ?? string.Empty, req.Subject ?? string.Empty, papel, req.IsActive ?? true, ctx.RequestAborted);
+        _log.LogInformation("Vínculo configurado: {Subject} ({Papel}) no workspace {WorkspaceId}", vinculo.Sujeito, vinculo.Papel, workspaceId);
+        return Results.Ok(new
+        {
+            membershipId = vinculo.VinculoId,
+            workspaceId = vinculo.EspacoTrabalhoId,
+            issuer = vinculo.Emissor,
+            subject = vinculo.Sujeito,
+            role = vinculo.Papel.ParaTexto(),
+            isActive = vinculo.Ativo,
+            createdAt = vinculo.CriadoEm
+        });
+    });
+
+    public Task<IResult> HandleListMembershipsAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: false, async ator =>
+    {
+        var lista = await _servico.ListarVinculosDoEspacoAsync(ator, workspaceId, ctx.RequestAborted);
+        return Results.Ok(lista.Select(v => new
+        {
+            membershipId = v.VinculoId,
+            workspaceId = v.EspacoTrabalhoId,
+            issuer = v.Emissor,
+            subject = v.Sujeito,
+            role = v.Papel.ParaTexto(),
+            isActive = v.Ativo,
+            createdAt = v.CriadoEm
+        }));
+    });
+
+    public Task<IResult> HandleRemoveMembershipAsync(HttpContext ctx, Guid workspaceId, Guid membershipId) => ExecutarAsync(ctx, mutacao: true, async ator =>
+    {
+        var removido = await _servico.RemoverVinculoAsync(ator, workspaceId, membershipId, ctx.RequestAborted);
+        if (!removido)
+            return Results.NotFound(new { code = "NOT_FOUND", message = $"Vínculo {membershipId} não encontrado no workspace." });
+
+        _log.LogInformation("Vínculo {MembershipId} removido do workspace {WorkspaceId}", membershipId, workspaceId);
+        return Results.Ok(new { success = true, removedMembershipId = membershipId });
+    });
 }

@@ -51,11 +51,11 @@ public interface IServicoIdentidadeAgente
 public sealed class ServicoIdentidadeAgente : IServicoIdentidadeAgente
 {
     private readonly IConfiguration _config;
-    private readonly IWebHostEnvironment _ambiente;
+    private readonly IHostEnvironment _ambiente;
     private readonly ILogger<ServicoIdentidadeAgente> _log;
     private readonly List<(byte[] Hash, ConfiguracaoChaveApi Config)> _chaves;
 
-    public ServicoIdentidadeAgente(IConfiguration config, IWebHostEnvironment ambiente, ILogger<ServicoIdentidadeAgente> log)
+    public ServicoIdentidadeAgente(IConfiguration config, IHostEnvironment ambiente, ILogger<ServicoIdentidadeAgente> log)
     {
         _config = config;
         _ambiente = ambiente;
@@ -73,15 +73,22 @@ public sealed class ServicoIdentidadeAgente : IServicoIdentidadeAgente
     public static bool MockPermitido(IConfiguration config, IHostEnvironment ambiente) =>
         !ambiente.IsProduction() && config.GetValue<bool>("Sentinel:AllowMockTokens");
 
-    public async Task<IdentidadeAgente> AutenticarAsync(HttpContext contexto)
+    public Task<IdentidadeAgente> AutenticarAsync(HttpContext contexto)
     {
         var cabecalho = contexto.Request.Headers.Authorization.ToString();
         if (string.IsNullOrWhiteSpace(cabecalho) || !cabecalho.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
             throw new ExcecaoDeNaoAutorizado("Cabeçalho Authorization ausente. Esperado token Bearer.");
 
         var token = cabecalho["Bearer ".Length..].Trim();
-        if (token.Length == 0)
+        return AutenticarBearerAsync(token, contexto);
+    }
+
+    public async Task<IdentidadeAgente> AutenticarBearerAsync(string token, HttpContext? contexto = null)
+    {
+        if (string.IsNullOrWhiteSpace(token))
             throw new ExcecaoDeNaoAutorizado("Token Bearer vazio.");
+
+        token = token.Trim();
 
         // Autenticação por chave de API
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(token));
@@ -104,7 +111,7 @@ public sealed class ServicoIdentidadeAgente : IServicoIdentidadeAgente
         }
 
         // Autenticação por token JWT
-        if (JwtConfigurado(_config))
+        if (contexto != null && JwtConfigurado(_config))
         {
             var resultado = await contexto.AuthenticateAsync(EsquemasDeAutenticacao.JwtMcp);
             if (resultado.Succeeded && resultado.Principal != null)

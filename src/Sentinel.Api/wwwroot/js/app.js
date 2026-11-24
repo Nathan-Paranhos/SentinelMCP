@@ -4,24 +4,29 @@ import { CommandPalette } from './command-palette.js';
 import { escapeHtml, urlHttpsSegura, gerarChaveIdempotencia, formatarData } from './util.js';
 import {
     buscarEstadoRevisao,
+    buscarLinhaDoTempo,
+    buscarComprovante,
+    buscarDetalhesWorkspaceAdmin,
     obterWorkspaceIdDaUrl,
     postarJson,
+    criarProjetoAdmin,
+    configurarVinculoAdmin,
+    removerVinculoAdmin,
     encerrarSessao,
     redirecionarParaLogin
 } from './review-api.js';
 
 const MOTIVO_MAX_CARACTERES = 1000;
-const AVISO_SOMENTE_MAINTAINERS = 'Somente Maintainers podem aprovar ou rejeitar';
+const AVISO_SOMENTE_MAINTAINERS = 'Somente Maintainers podem aprovar, rejeitar, restaurar ou administrar';
 
 let commandPaletteInstance = null;
 let modalPayload = null;
 let operacaoEmAndamento = false;
 let appIniciado = false;
+const timelineCache = new Map();
+const timelineLoading = new Set();
+let adminLoadingWsId = null;
 
-/**
- * Inicializa o painel com o estado vindo de GET /api/review/state.
- * O token CSRF vem dentro de `dados.csrf`.
- */
 export function initApp(dados) {
     if (appIniciado) {
         aplicarEstado(dados);
@@ -30,7 +35,6 @@ export function initApp(dados) {
     appIniciado = true;
 
     appStore.initData(dados);
-
     commandPaletteInstance = new CommandPalette();
 
     setupSidebar();
@@ -43,6 +47,14 @@ export function initApp(dados) {
     appStore.subscribe('selectedReviewId', renderActiveView);
     appStore.subscribe('selectedDecisionId', renderActiveView);
     appStore.subscribe('selectedIncidentId', renderActiveView);
+    appStore.subscribe('timelineFilter', renderActiveView);
+    appStore.subscribe('activeMcpClient', renderActiveView);
+    appStore.subscribe('adminDetails', () => {
+        if (appStore.get('activeView') === 'admin') renderActiveView();
+    });
+    appStore.subscribe('receiptPreview', () => {
+        if (appStore.get('activeView') === 'mcp') renderActiveView();
+    });
     appStore.subscribe('sidebarCollapsed', updateSidebarState);
     appStore.subscribe('inspectorOpen', updateInspectorState);
     appStore.subscribe('theme', updateThemeToggleBtn);
@@ -55,14 +67,13 @@ export function initApp(dados) {
 }
 
 function aplicarEstado(dados) {
+    timelineCache.clear();
+    appStore.set('adminDetails', null);
     appStore.initData(dados);
     renderSessionChrome();
     renderActiveView();
 }
 
-/**
- * Refaz GET /api/review/state e reaplica o estado. Retorna true em caso de sucesso.
- */
 export async function recarregarEstado() {
     const workspaceAtual = appStore.get('workspace');
     const workspaceId = (workspaceAtual && workspaceAtual.id) || obterWorkspaceIdDaUrl();
@@ -87,6 +98,23 @@ export async function recarregarEstado() {
 function podeRevisar() {
     const usuario = appStore.get('usuario');
     return !!(usuario && usuario.podeRevisar === true);
+}
+
+function nomeProjeto(projetoId) {
+    const lista = appStore.get('projetos') || [];
+    const proj = lista.find(p => p && p.id === projetoId);
+    return proj ? proj.nome : (projetoId ? String(projetoId).slice(0, 8) + '...' : '—');
+}
+
+function copiarTexto(texto, rotulo = 'Valor') {
+    if (!texto) return;
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+        navigator.clipboard.writeText(String(texto))
+            .then(() => mostrarToast(`${rotulo} copiado para a área de transferência.`, 'sucesso'))
+            .catch(() => mostrarToast('Não foi possível copiar automaticamente.', 'erro'));
+    } else {
+        mostrarToast('Área de transferência indisponível neste navegador.', 'erro');
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -152,9 +180,16 @@ function renderWorkspaceSelector() {
 
 function setupSidebar() {
     document.querySelectorAll('[data-view-nav]').forEach(el => {
-        el.addEventListener('click', () => {
+        const ativar = () => {
             const view = el.getAttribute('data-view-nav');
-            appStore.set('activeView', view);
+            if (view) appStore.set('activeView', view);
+        };
+        el.addEventListener('click', ativar);
+        el.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                ativar();
+            }
         });
     });
 
@@ -169,12 +204,8 @@ function setupSidebar() {
 function updateSidebarState(collapsed) {
     const sidebar = document.getElementById('macos-sidebar');
     const btn = document.getElementById('sidebar-toggle-btn');
-    if (sidebar) {
-        sidebar.classList.toggle('collapsed', !!collapsed);
-    }
-    if (btn) {
-        btn.classList.toggle('active', !collapsed);
-    }
+    if (sidebar) sidebar.classList.toggle('collapsed', !!collapsed);
+    if (btn) btn.classList.toggle('active', !collapsed);
 }
 
 function setupToolbar() {
@@ -223,17 +254,13 @@ function setupInspector() {
 function updateInspectorState(open) {
     const inspector = document.getElementById('macos-inspector');
     const btn = document.getElementById('inspector-toggle-btn');
-    if (inspector) {
-        inspector.classList.toggle('collapsed', !open);
-    }
-    if (btn) {
-        btn.classList.toggle('active', !!open);
-    }
+    if (inspector) inspector.classList.toggle('collapsed', !open);
+    if (btn) btn.classList.toggle('active', !!open);
     renderInspectorContent();
 }
 
 // ---------------------------------------------------------------------------
-// Eventos delegados (substituem todos os handlers inline)
+// Eventos delegados
 // ---------------------------------------------------------------------------
 
 function setupDelegatedEvents() {
@@ -245,6 +272,11 @@ function setupDelegatedEvents() {
         switch (ds.action) {
             case 'navigate':
                 if (ds.view) appStore.set('activeView', ds.view);
+                break;
+            case 'refresh-state':
+                recarregarEstado().then(ok => {
+                    if (ok) mostrarToast('Estado atualizado.', 'sucesso');
+                });
                 break;
             case 'select-review':
                 appStore.set('selectedReviewId', ds.topicId || null);
@@ -273,12 +305,57 @@ function setupDelegatedEvents() {
             case 'reject':
                 abrirModalRejeicao(ds.topicId, ds.proposalId);
                 break;
+            case 'restore':
+                abrirModalRestauracao(ds.topicId, parseInt(ds.versionToRestore, 10));
+                break;
+            case 'copy-text':
+                copiarTexto(ds.copyValue || '', ds.copyLabel || 'Valor');
+                break;
+            case 'copy-element': {
+                const el = ds.copyTarget ? document.getElementById(ds.copyTarget) : null;
+                if (el) copiarTexto(el.textContent || '', ds.copyLabel || 'Configuração');
+                break;
+            }
+            case 'set-timeline-filter':
+                appStore.set('timelineFilter', ds.filter || 'all');
+                break;
+            case 'set-mcp-client':
+                appStore.set('activeMcpClient', ds.client || 'codex');
+                break;
+            case 'apply-membership-preset': {
+                const issEl = document.getElementById('admin-member-issuer');
+                const subEl = document.getElementById('admin-member-subject');
+                const roleEl = document.getElementById('admin-member-role');
+                if (issEl && ds.issuer) issEl.value = ds.issuer;
+                if (subEl && ds.subject) subEl.value = ds.subject;
+                if (roleEl && ds.role) roleEl.value = ds.role;
+                break;
+            }
+            case 'delete-membership':
+                abrirModalRemoverVinculo(ds.membershipId, ds.subject);
+                break;
             case 'logout':
                 evento.preventDefault();
                 sair(alvo);
                 break;
             default:
                 break;
+        }
+    });
+
+    document.addEventListener('input', (evento) => {
+        const alvo = evento.target;
+        if (!(alvo instanceof HTMLElement)) return;
+        if (alvo.dataset.action === 'pane-search') {
+            appStore.set('filterText', alvo.value || '');
+            atualizarListaFiltradaSemPerderFoco(alvo);
+        } else if (alvo.id === 'admin-proj-name') {
+            const slugEl = document.getElementById('admin-proj-slug');
+            if (slugEl && !slugEl.dataset.edited) {
+                slugEl.value = gerarSlugSugerido(alvo.value);
+            }
+        } else if (alvo.id === 'admin-proj-slug') {
+            alvo.dataset.edited = '1';
         }
     });
 
@@ -298,12 +375,31 @@ function setupDelegatedEvents() {
                     window.location.href = '/review?workspaceId=' + encodeURIComponent(alvo.value);
                 }
                 break;
+            case 'pane-project-filter':
+                appStore.set('filterProjectId', alvo.value || 'all');
+                renderActiveView();
+                break;
             default:
                 break;
         }
     });
 
-    // Acessibilidade: linhas clicáveis (role="button") respondem a Enter/Espaço.
+    document.addEventListener('submit', (evento) => {
+        const form = evento.target;
+        if (!(form instanceof HTMLFormElement)) return;
+        const acao = form.dataset.action;
+        if (!acao) return;
+        evento.preventDefault();
+
+        if (acao === 'verify-receipt') {
+            executarAuditoriaComprovante();
+        } else if (acao === 'create-project') {
+            executarCriacaoProjeto(form);
+        } else if (acao === 'save-membership') {
+            executarSalvarVinculo(form);
+        }
+    });
+
     document.addEventListener('keydown', (evento) => {
         if (evento.key !== 'Enter' && evento.key !== ' ') return;
         const alvo = evento.target;
@@ -311,6 +407,22 @@ function setupDelegatedEvents() {
         evento.preventDefault();
         alvo.click();
     });
+}
+
+function atualizarListaFiltradaSemPerderFoco(inputEl) {
+    const view = appStore.get('activeView');
+    const scrollEl = document.querySelector('.split-pane-scroll');
+    if (!scrollEl) {
+        renderActiveView();
+        return;
+    }
+    if (view === 'reviews') {
+        scrollEl.innerHTML = renderListaPropostasHtml();
+    } else if (view === 'decisions') {
+        scrollEl.innerHTML = renderListaDecisoesHtml();
+    } else if (view === 'incidents') {
+        scrollEl.innerHTML = renderListaIncidentesHtml();
+    }
 }
 
 async function sair(botao) {
@@ -330,8 +442,54 @@ async function sair(botao) {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers de renderização
+// Helpers de renderização e filtros
 // ---------------------------------------------------------------------------
+
+function gerarSlugSugerido(texto) {
+    return String(texto || '')
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80);
+}
+
+function filtrarLista(itens, camposFn) {
+    const projId = appStore.get('filterProjectId') || 'all';
+    const termo = (appStore.get('filterText') || '').trim().toLowerCase();
+    return (itens || []).filter(item => {
+        if (!item) return false;
+        if (projId !== 'all' && item.projetoId !== projId) return false;
+        if (!termo) return true;
+        return camposFn(item).some(v => String(v || '').toLowerCase().includes(termo));
+    });
+}
+
+function renderFiltroPainel(titulo, quantidade, placeholder) {
+    const projetos = appStore.get('projetos') || [];
+    const projSel = appStore.get('filterProjectId') || 'all';
+    const texto = appStore.get('filterText') || '';
+
+    const opcoesProjeto = projetos.map(p =>
+        `<option value="${escapeHtml(p.id)}" ${projSel === p.id ? 'selected' : ''}>Projeto: ${escapeHtml(p.nome)}</option>`
+    ).join('');
+
+    return `
+        <div class="pane-filter-bar">
+            <div class="pane-filter-header">
+                <span>${escapeHtml(titulo)} (${quantidade})</span>
+                <span>${projetos.length} proj.</span>
+            </div>
+            <input type="search" class="pane-search-input" data-action="pane-search" value="${escapeHtml(texto)}" placeholder="${escapeHtml(placeholder)}">
+            ${projetos.length > 0 ? `
+                <select class="pane-select" data-action="pane-project-filter" aria-label="Filtrar por projeto">
+                    <option value="all" ${projSel === 'all' ? 'selected' : ''}>Todos os projetos</option>
+                    ${opcoesProjeto}
+                </select>
+            ` : ''}
+        </div>
+    `;
+}
 
 function renderEvidencias(lista, mensagemVazia) {
     const itens = Array.isArray(lista) ? lista.filter(Boolean) : [];
@@ -355,7 +513,6 @@ function renderEvidencias(lista, mensagemVazia) {
                 </a>`;
         }
 
-        // URL ausente ou não-https: exibida apenas como texto (sem link).
         return `
             <div class="evidence-link-row evidence-text-row" title="Somente URLs https:// são exibidas como link.">
                 ${esquerda}
@@ -367,9 +524,7 @@ function renderEvidencias(lista, mensagemVazia) {
 function renderChavesTecnicas(lista) {
     const chaves = Array.isArray(lista) ? lista.filter(k => k !== null && k !== undefined && k !== '') : [];
     if (chaves.length === 0) return '';
-    return chaves.map(k => `
-        <span style="font-family:var(--font-mono);font-size:0.74rem;background:var(--code-bg);padding:2px 7px;border-radius:4px;color:var(--text-secondary);">${escapeHtml(k)}</span>
-    `).join(' ');
+    return chaves.map(k => `<span class="tech-key-chip">${escapeHtml(k)}</span>`).join('');
 }
 
 function renderSecaoChaves(lista) {
@@ -378,7 +533,7 @@ function renderSecaoChaves(lista) {
     return `
         <div class="doc-section">
             <div class="doc-section-title">Chaves Técnicas e Identificadores</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px;">${html}</div>
+            <div class="tech-keys-wrap">${html}</div>
         </div>
     `;
 }
@@ -436,11 +591,11 @@ function pillSituacao(mapa, situacao, padrao) {
 
 function estadoVazio(titulo, descricaoHtml, iconeHtml = '') {
     return `
-        <div style="flex:1;display:flex;align-items:center;justify-content:center;padding:2rem;">
-            <div style="text-align:center;max-width:380px;">
-                ${iconeHtml ? `<div style="width:48px;height:48px;border-radius:12px;background:var(--bg-surface-secondary);display:flex;align-items:center;justify-content:center;margin:0 auto 1rem;color:var(--text-tertiary);">${iconeHtml}</div>` : ''}
-                <h3 style="margin:0 0 0.5rem;font-size:1.1rem;color:var(--text-primary);font-weight:600;">${escapeHtml(titulo)}</h3>
-                <p style="margin:0;font-size:0.86rem;color:var(--text-secondary);line-height:1.5;">${descricaoHtml}</p>
+        <div class="empty-state-wrap">
+            <div class="empty-state-inner">
+                ${iconeHtml ? `<div class="empty-state-icon">${iconeHtml}</div>` : ''}
+                <h3 class="empty-state-title">${escapeHtml(titulo)}</h3>
+                <p class="empty-state-desc">${descricaoHtml}</p>
             </div>
         </div>
     `;
@@ -481,11 +636,14 @@ function renderActiveView() {
         if (toolbarTitle) toolbarTitle.textContent = 'Incidentes Reportados';
         renderIncidentsView(contentBody);
     } else if (view === 'timeline') {
-        if (toolbarTitle) toolbarTitle.textContent = 'Histórico de Eventos';
+        if (toolbarTitle) toolbarTitle.textContent = 'Linha do Tempo Imutável';
         renderTimelineView(contentBody);
     } else if (view === 'mcp') {
-        if (toolbarTitle) toolbarTitle.textContent = 'Integrações MCP';
+        if (toolbarTitle) toolbarTitle.textContent = 'Conectar Agentes MCP';
         renderMcpView(contentBody);
+    } else if (view === 'admin') {
+        if (toolbarTitle) toolbarTitle.textContent = 'Administração do Workspace';
+        renderAdminView(contentBody);
     } else if (view === 'settings') {
         if (toolbarTitle) toolbarTitle.textContent = 'Configurações do Sistema';
         renderSettingsView(contentBody);
@@ -497,31 +655,76 @@ function renderActiveView() {
 function renderOverviewView(container) {
     const propostas = appStore.get('propostas');
     const decisoes = appStore.get('decisoes');
+    const incidentes = appStore.get('incidentes');
+    const eventos = appStore.get('eventos');
+    const projetos = appStore.get('projetos') || [];
     const ws = appStore.get('workspace');
     const wsNome = ws ? (ws.nome || ws.slug) : 'Workspace Principal';
 
     container.innerHTML = `
         <div class="overview-view">
             <div class="overview-hero">
-                <div class="overview-badge">Espaço: ${escapeHtml(wsNome)}</div>
-                <h1 class="overview-title">Governança Arquitetural Ativa</h1>
-                <p class="overview-desc">Consolidação contínua de decisões de arquitetura e relatos de incidentes com proveniência imutável e controle de concorrência.</p>
+                <div class="overview-badge">Workspace: ${escapeHtml(wsNome)} &bull; ${projetos.length} projeto(s)</div>
+                <h1 class="overview-title">Painel de Governança Arquitetural</h1>
+                <p class="overview-desc">Acompanhe propostas submetidas por agentes via MCP, decisões arquiteturais ativas, incidentes e trilha imutável de eventos.</p>
             </div>
+
+            <div class="metrics-grid">
+                <div class="metric-card" role="button" tabindex="0" data-action="navigate" data-view="reviews">
+                    <span class="metric-card-label">Aguardando Revisão</span>
+                    <span class="metric-card-value">${propostas.length}</span>
+                    <span class="metric-card-sub">propostas pendentes</span>
+                </div>
+                <div class="metric-card" role="button" tabindex="0" data-action="navigate" data-view="decisions">
+                    <span class="metric-card-label">Decisões Vigentes</span>
+                    <span class="metric-card-value">${decisoes.length}</span>
+                    <span class="metric-card-sub">tópicos consolidados</span>
+                </div>
+                <div class="metric-card" role="button" tabindex="0" data-action="navigate" data-view="incidents">
+                    <span class="metric-card-label">Incidentes</span>
+                    <span class="metric-card-value">${incidentes.length}</span>
+                    <span class="metric-card-sub">relatos e RCAs</span>
+                </div>
+                <div class="metric-card" role="button" tabindex="0" data-action="navigate" data-view="timeline">
+                    <span class="metric-card-label">Eventos Recentes</span>
+                    <span class="metric-card-value">${eventos.length}</span>
+                    <span class="metric-card-sub">log append-only</span>
+                </div>
+            </div>
+
+            ${ws ? `
+                <div class="overview-section">
+                    <div class="overview-section-header">
+                        <div class="overview-section-title">Identificadores para Agentes MCP (Codex / Claude / Cursor)</div>
+                        <button type="button" class="btn-macos btn-macos-secondary btn-macos-sm" data-action="navigate" data-view="mcp">Configurar Agentes</button>
+                    </div>
+                    <div class="tech-keys-wrap">
+                        <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(ws.id)}" data-copy-label="Workspace ID">
+                            ${Icons.copy} Workspace: ${escapeHtml(ws.id)}
+                        </button>
+                        ${projetos.map(p => `
+                            <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(p.id)}" data-copy-label="Project ID (${escapeHtml(p.nome)})">
+                                ${Icons.copy} Projeto ${escapeHtml(p.slug)}: ${escapeHtml(p.id)}
+                            </button>
+                        `).join('')}
+                    </div>
+                </div>
+            ` : ''}
 
             <div class="overview-section">
                 <div class="overview-section-header">
                     <div class="overview-section-title">Aguardando Validação Humana (${propostas.length})</div>
-                    <button type="button" class="btn-macos btn-macos-secondary" data-action="navigate" data-view="reviews">Ver Todas</button>
+                    <button type="button" class="btn-macos btn-macos-secondary btn-macos-sm" data-action="navigate" data-view="reviews">Ver Todas</button>
                 </div>
                 ${propostas.length === 0 ? `
-                    <div style="padding: 1.5rem; text-align: center; color: var(--text-tertiary); font-size: 0.88rem;">
+                    <div class="panel-card" style="text-align:center;color:var(--text-tertiary);">
                         Nenhuma proposta aguardando validação no momento.
                     </div>
                 ` : propostas.map(p => `
                     <div class="overview-list-row" role="button" tabindex="0" data-action="open-review" data-topic-id="${escapeHtml(p.topicoId)}">
                         <div class="overview-row-left">
                             <span class="overview-row-title">${escapeHtml(p.titulo)}</span>
-                            <span class="overview-row-sub">tópico: ${escapeHtml(p.chaveTopico)} • v${escapeHtml(p.versaoFluxo)}</span>
+                            <span class="overview-row-sub">${escapeHtml(nomeProjeto(p.projetoId))} &bull; tópico: ${escapeHtml(p.chaveTopico)} &bull; v${escapeHtml(p.versaoFluxo)}</span>
                         </div>
                         <div class="overview-row-right">
                             <span class="status-pill proposed-state">Revisão Necessária</span>
@@ -534,17 +737,17 @@ function renderOverviewView(container) {
             <div class="overview-section">
                 <div class="overview-section-header">
                     <div class="overview-section-title">Decisões Vigentes Ativas (${decisoes.length})</div>
-                    <button type="button" class="btn-macos btn-macos-secondary" data-action="navigate" data-view="decisions">Ver Todas</button>
+                    <button type="button" class="btn-macos btn-macos-secondary btn-macos-sm" data-action="navigate" data-view="decisions">Ver Todas</button>
                 </div>
                 ${decisoes.length === 0 ? `
-                    <div style="padding: 1.5rem; text-align: center; color: var(--text-tertiary); font-size: 0.88rem;">
+                    <div class="panel-card" style="text-align:center;color:var(--text-tertiary);">
                         Nenhuma decisão vigente consolidada no momento.
                     </div>
                 ` : decisoes.map(d => `
                     <div class="overview-list-row" role="button" tabindex="0" data-action="open-decision" data-topic-id="${escapeHtml(d.topicoId)}">
                         <div class="overview-row-left">
                             <span class="overview-row-title">${escapeHtml(d.titulo)}</span>
-                            <span class="overview-row-sub">tópico: ${escapeHtml(d.chaveTopico)} • versão ${escapeHtml(d.versaoFluxo)}</span>
+                            <span class="overview-row-sub">${escapeHtml(nomeProjeto(d.projetoId))} &bull; tópico: ${escapeHtml(d.chaveTopico)} &bull; v${escapeHtml(d.versaoFluxo)}</span>
                         </div>
                         <div class="overview-row-right">
                             ${pillSituacao(SITUACAO_DECISAO, d.situacao, SITUACAO_DECISAO.active)}
@@ -557,12 +760,36 @@ function renderOverviewView(container) {
     `;
 }
 
-function renderReviewsView(container) {
-    const propostas = appStore.get('propostas');
-    const selectedId = appStore.get('selectedReviewId');
-    const selected = propostas.find(p => p.topicoId === selectedId) || propostas[0];
+// --- Revisões ---
 
-    if (propostas.length === 0) {
+function renderListaPropostasHtml() {
+    const todas = appStore.get('propostas');
+    const filtradas = filtrarLista(todas, p => [p.chaveTopico, p.titulo, p.resumo, p.autorSujeito, ...(p.chavesTecnicas || [])]);
+    const selectedId = appStore.get('selectedReviewId');
+    const selected = filtradas.find(p => p.topicoId === selectedId) || filtradas[0];
+
+    if (filtradas.length === 0) {
+        return `<div style="padding:1.5rem;text-align:center;color:var(--text-tertiary);font-size:0.82rem;">Nenhuma proposta corresponde ao filtro.</div>`;
+    }
+
+    return filtradas.map(p => {
+        const isSel = selected && p.topicoId === selected.topicoId;
+        return `
+            <div class="record-list-item ${isSel ? 'selected' : ''}" role="button" tabindex="0" data-action="select-review" data-topic-id="${escapeHtml(p.topicoId)}">
+                <div class="record-item-top">
+                    <span class="record-item-topic">${escapeHtml(p.chaveTopico)}</span>
+                    <span class="record-item-version">v${escapeHtml(p.versaoFluxo)}</span>
+                </div>
+                <div class="record-item-title">${escapeHtml(p.titulo)}</div>
+                <div class="record-item-summary">${escapeHtml(p.resumo)}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderReviewsView(container) {
+    const todas = appStore.get('propostas');
+    if (todas.length === 0) {
         container.innerHTML = estadoVazio(
             'Nenhuma proposta pendente',
             'Todas as propostas submetidas por agentes via MCP foram validadas e consolidadas.',
@@ -571,29 +798,21 @@ function renderReviewsView(container) {
         return;
     }
 
+    const filtradas = filtrarLista(todas, p => [p.chaveTopico, p.titulo, p.resumo, p.autorSujeito, ...(p.chavesTecnicas || [])]);
+    const selectedId = appStore.get('selectedReviewId');
+    const selected = filtradas.find(p => p.topicoId === selectedId) || filtradas[0] || null;
+
     container.innerHTML = `
         <div class="split-view">
             <div class="split-pane-list">
-                <div style="font-size:0.72rem;font-weight:600;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:0.04em;padding:4px 8px 8px;">
-                    Propostas (${propostas.length})
+                ${renderFiltroPainel('Propostas', filtradas.length, 'Filtrar propostas...')}
+                <div class="split-pane-scroll">
+                    ${renderListaPropostasHtml()}
                 </div>
-                ${propostas.map(p => {
-                    const isSel = selected && p.topicoId === selected.topicoId;
-                    return `
-                        <div class="record-list-item ${isSel ? 'selected' : ''}" role="button" tabindex="0" data-action="select-review" data-topic-id="${escapeHtml(p.topicoId)}">
-                            <div class="record-item-top">
-                                <span class="record-item-topic">${escapeHtml(p.chaveTopico)}</span>
-                                <span class="record-item-version">v${escapeHtml(p.versaoFluxo)}</span>
-                            </div>
-                            <div class="record-item-title">${escapeHtml(p.titulo)}</div>
-                            <div class="record-item-summary">${escapeHtml(p.resumo)}</div>
-                        </div>
-                    `;
-                }).join('')}
             </div>
 
             <div class="split-pane-detail">
-                ${selected ? renderProposalDetail(selected) : ''}
+                ${selected ? renderProposalDetail(selected) : estadoVazio('Nenhum resultado', 'Ajuste o filtro para exibir propostas.', Icons.reviews)}
             </div>
         </div>
     `;
@@ -605,14 +824,21 @@ function renderProposalDetail(p) {
     const cliente = p.clienteId ? `<code>${escapeHtml(p.clienteId)}</code>` : 'cliente não informado';
     const quando = escapeHtml(formatarData(p.propostaEm, 'data não informada'));
 
-    const secaoVigente = vigente ? `
+    const secaoComparacao = vigente ? `
         <div class="doc-section">
-            <div class="doc-section-title">Decisão vigente que será substituída</div>
-            <div class="superseded-decision-box">
-                <div class="superseded-decision-title">${escapeHtml(vigente.titulo)}</div>
-                <div>${escapeHtml(vigente.resumo)}</div>
-                <div style="margin-top:8px;font-family:var(--font-mono);font-size:0.72rem;color:var(--text-tertiary);">
-                    registro vigente: v${escapeHtml(vigente.versaoRegistroAtivo)}${vigente.registroAtivoId ? ` • ${escapeHtml(vigente.registroAtivoId)}` : ''}
+            <div class="doc-section-title">Comparação com Decisão Vigente (Substituição)</div>
+            <div class="comparison-diff-grid">
+                <div class="diff-card current">
+                    <div class="diff-card-label">Vigente Atual (será substituída)</div>
+                    <div class="diff-card-title">${escapeHtml(vigente.titulo)}</div>
+                    <div class="diff-card-body">${escapeHtml(vigente.resumo)}</div>
+                    <div class="diff-card-meta">registro v${escapeHtml(vigente.versaoRegistroAtivo)}</div>
+                </div>
+                <div class="diff-card proposed">
+                    <div class="diff-card-label">Nova Proposta</div>
+                    <div class="diff-card-title">${escapeHtml(p.titulo)}</div>
+                    <div class="diff-card-body">${escapeHtml(p.resumo)}</div>
+                    <div class="diff-card-meta">fluxo v${escapeHtml(p.versaoFluxo)}</div>
                 </div>
             </div>
         </div>
@@ -638,9 +864,12 @@ function renderProposalDetail(p) {
         <div class="doc-view-header">
             <div class="doc-meta-tags">
                 <span class="status-pill proposed-state">Revisão Humana Obrigatória</span>
-                ${vigente ? `<span class="status-pill reported-state">Substitui decisão vigente v${escapeHtml(vigente.versaoRegistroAtivo)}</span>` : '<span class="status-pill reported-state">Primeira decisão do tópico</span>'}
-                <span style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-tertiary);">tópico: ${escapeHtml(p.chaveTopico)}</span>
-                <span style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-tertiary);">versão do fluxo: ${escapeHtml(p.versaoFluxo)}</span>
+                ${vigente ? `<span class="status-pill reported-state">Substitui v${escapeHtml(vigente.versaoRegistroAtivo)}</span>` : '<span class="status-pill reported-state">Primeira decisão</span>'}
+                <span class="mono-tag">projeto: ${escapeHtml(nomeProjeto(p.projetoId))}</span>
+                <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(p.chaveTopico)}" data-copy-label="Chave do tópico">
+                    ${Icons.copy} ${escapeHtml(p.chaveTopico)}
+                </button>
+                <span class="mono-tag">v${escapeHtml(p.versaoFluxo)}</span>
             </div>
             <h1 class="doc-title">${escapeHtml(p.titulo)}</h1>
             <div class="doc-timestamp">Proposto por <strong>${autor}</strong> via ${cliente} em ${quando}</div>
@@ -656,8 +885,8 @@ function renderProposalDetail(p) {
             <div class="doc-content-box">${escapeHtml(p.justificativa || 'Nenhuma justificativa técnica detalhada fornecida.')}</div>
         </div>
 
+        ${secaoComparacao}
         ${renderSecaoChaves(p.chavesTecnicas)}
-
         ${renderSecaoIncidentesRelacionados(p.incidentesRelacionadosIds)}
 
         <div class="doc-section">
@@ -665,60 +894,144 @@ function renderProposalDetail(p) {
             <div class="evidence-table">${renderEvidencias(p.evidencias, 'Nenhuma evidência anexada.')}</div>
         </div>
 
-        ${secaoVigente}
-
         ${acoes}
     `;
 }
 
-function renderDecisionsView(container) {
-    const decisoes = appStore.get('decisoes');
-    const selectedId = appStore.get('selectedDecisionId');
-    const selected = decisoes.find(d => d.topicoId === selectedId) || decisoes[0];
+// --- Decisões Vigentes ---
 
-    if (decisoes.length === 0) {
+function renderListaDecisoesHtml() {
+    const todas = appStore.get('decisoes');
+    const filtradas = filtrarLista(todas, d => [d.chaveTopico, d.titulo, d.resumo, ...(d.chavesTecnicas || [])]);
+    const selectedId = appStore.get('selectedDecisionId');
+    const selected = filtradas.find(d => d.topicoId === selectedId) || filtradas[0];
+
+    if (filtradas.length === 0) {
+        return `<div style="padding:1.5rem;text-align:center;color:var(--text-tertiary);font-size:0.82rem;">Nenhuma decisão corresponde ao filtro.</div>`;
+    }
+
+    return filtradas.map(d => {
+        const isSel = selected && d.topicoId === selected.topicoId;
+        return `
+            <div class="record-list-item ${isSel ? 'selected' : ''}" role="button" tabindex="0" data-action="select-decision" data-topic-id="${escapeHtml(d.topicoId)}">
+                <div class="record-item-top">
+                    <span class="record-item-topic">${escapeHtml(d.chaveTopico)}</span>
+                    <span class="record-item-version">v${escapeHtml(d.versaoFluxo)}</span>
+                </div>
+                <div class="record-item-title">${escapeHtml(d.titulo)}</div>
+                <div class="record-item-summary">${escapeHtml(d.resumo)}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderDecisionsView(container) {
+    const todas = appStore.get('decisoes');
+    if (todas.length === 0) {
         container.innerHTML = estadoVazio(
             'Nenhuma decisão vigente',
-            'Não há decisões ativas consolidadas neste espaço de trabalho.'
+            'Não há decisões ativas consolidadas neste espaço de trabalho.',
+            Icons.decisions
         );
         return;
     }
 
+    const filtradas = filtrarLista(todas, d => [d.chaveTopico, d.titulo, d.resumo, ...(d.chavesTecnicas || [])]);
+    const selectedId = appStore.get('selectedDecisionId');
+    const selected = filtradas.find(d => d.topicoId === selectedId) || filtradas[0] || null;
+
     container.innerHTML = `
         <div class="split-view">
             <div class="split-pane-list">
-                <div style="font-size:0.72rem;font-weight:600;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:0.04em;padding:4px 8px 8px;">
-                    Decisões Vigentes (${decisoes.length})
+                ${renderFiltroPainel('Decisões', filtradas.length, 'Filtrar decisões...')}
+                <div class="split-pane-scroll">
+                    ${renderListaDecisoesHtml()}
                 </div>
-                ${decisoes.map(d => {
-                    const isSel = selected && d.topicoId === selected.topicoId;
-                    return `
-                        <div class="record-list-item ${isSel ? 'selected' : ''}" role="button" tabindex="0" data-action="select-decision" data-topic-id="${escapeHtml(d.topicoId)}">
-                            <div class="record-item-top">
-                                <span class="record-item-topic">${escapeHtml(d.chaveTopico)}</span>
-                                <span class="record-item-version">v${escapeHtml(d.versaoFluxo)}</span>
-                            </div>
-                            <div class="record-item-title">${escapeHtml(d.titulo)}</div>
-                            <div class="record-item-summary">${escapeHtml(d.resumo)}</div>
-                        </div>
-                    `;
-                }).join('')}
             </div>
 
             <div class="split-pane-detail">
-                ${selected ? renderDecisionDetail(selected) : ''}
+                ${selected ? renderDecisionDetail(selected) : estadoVazio('Nenhum resultado', 'Ajuste o filtro para exibir decisões.', Icons.decisions)}
             </div>
+        </div>
+    `;
+
+    if (selected) carregarTimelineDecisao(selected);
+}
+
+function chaveCacheTimeline(d) {
+    return `${d.topicoId}@${d.versaoFluxo}`;
+}
+
+async function carregarTimelineDecisao(d) {
+    const chave = chaveCacheTimeline(d);
+    if (timelineCache.has(chave) || timelineLoading.has(chave)) return;
+    timelineLoading.add(chave);
+    try {
+        const res = await buscarLinhaDoTempo(d.espacoTrabalhoId, d.projetoId, 'decision', d.topicoId);
+        if (res.ok && res.dados) {
+            timelineCache.set(chave, res.dados);
+            const host = document.getElementById(`decision-history-${d.topicoId}`);
+            if (host) host.innerHTML = renderConteudoHistoricoDecisao(d, res.dados);
+        }
+    } finally {
+        timelineLoading.delete(chave);
+    }
+}
+
+function renderConteudoHistoricoDecisao(d, timeline) {
+    const eventos = timeline && Array.isArray(timeline.events) ? timeline.events : [];
+    if (eventos.length === 0) {
+        return `<div style="color:var(--text-tertiary);font-size:0.82rem;">Nenhum evento encontrado na trilha deste tópico.</div>`;
+    }
+
+    return `
+        <div class="version-timeline">
+            ${eventos.map(ev => {
+                const info = classificarEvento(ev.type);
+                const podeRestaurar = podeRevisar()
+                    && !d.propostaPendenteId
+                    && ev.type === 'DecisionApproved'
+                    && ev.streamVersion < d.versaoFluxo;
+                return `
+                    <div class="version-row">
+                        <div class="version-row-left">
+                            <div class="version-row-head">
+                                <span class="status-pill ${info.classe}">${escapeHtml(info.rotulo)}</span>
+                                <span class="mono-tag">v${escapeHtml(ev.streamVersion)}</span>
+                                <strong>${escapeHtml(ev.type)}</strong>
+                            </div>
+                            <div class="version-row-meta">
+                                Por ${escapeHtml(ev.authorSubject)} (${escapeHtml(ev.clientId || 'sessão web')}) em ${escapeHtml(formatarData(ev.recordedAt))}
+                                ${ev.reason ? ` &bull; Motivo: "${escapeHtml(ev.reason)}"` : ''}
+                            </div>
+                        </div>
+                        ${podeRestaurar ? `
+                            <button type="button" class="btn-macos btn-macos-secondary btn-macos-sm"
+                                data-action="restore"
+                                data-topic-id="${escapeHtml(d.topicoId)}"
+                                data-version-to-restore="${escapeHtml(ev.streamVersion)}">
+                                ${Icons.history} Restaurar v${escapeHtml(ev.streamVersion)}
+                            </button>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('')}
         </div>
     `;
 }
 
 function renderDecisionDetail(d) {
+    const cache = timelineCache.get(chaveCacheTimeline(d));
+    const historicoHtml = cache
+        ? renderConteudoHistoricoDecisao(d, cache)
+        : `<div style="color:var(--text-tertiary);font-size:0.82rem;">Carregando histórico de eventos...</div>`;
+
     const avisoPendente = d.propostaPendenteId ? `
         <div class="doc-section">
             <div class="evidence-link-row" role="button" tabindex="0" style="cursor:pointer;" data-action="open-review" data-topic-id="${escapeHtml(d.topicoId)}">
                 <div class="evidence-row-left">
                     <span class="status-pill proposed-state">Proposta pendente</span>
-                    <span>Há uma proposta aguardando revisão para este tópico.</span>
+                    <span>Há uma nova proposta aguardando revisão humana para substituir este tópico.</span>
                 </div>
                 <span style="color:var(--text-tertiary);">${Icons.chevronRight}</span>
             </div>
@@ -729,9 +1042,15 @@ function renderDecisionDetail(d) {
         <div class="doc-view-header">
             <div class="doc-meta-tags">
                 ${pillSituacao(SITUACAO_DECISAO, d.situacao, SITUACAO_DECISAO.active)}
-                <span style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-tertiary);">tópico: ${escapeHtml(d.chaveTopico)}</span>
-                <span style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-tertiary);">versão ${escapeHtml(d.versaoFluxo)}</span>
-                ${d.versaoRegistroAtivo !== undefined && d.versaoRegistroAtivo !== null ? `<span style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-tertiary);">registro v${escapeHtml(d.versaoRegistroAtivo)}</span>` : ''}
+                <span class="mono-tag">projeto: ${escapeHtml(nomeProjeto(d.projetoId))}</span>
+                <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(d.chaveTopico)}" data-copy-label="Chave do tópico">
+                    ${Icons.copy} ${escapeHtml(d.chaveTopico)}
+                </button>
+                <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(d.topicoId)}" data-copy-label="Topic ID">
+                    ${Icons.copy} ID: ${escapeHtml(String(d.topicoId).slice(0, 8))}...
+                </button>
+                ${d.versaoRegistroAtivo != null ? `<span class="mono-tag">registro v${escapeHtml(d.versaoRegistroAtivo)}</span>` : ''}
+                <span class="mono-tag">fluxo v${escapeHtml(d.versaoFluxo)}</span>
             </div>
             <h1 class="doc-title">${escapeHtml(d.titulo)}</h1>
             <div class="doc-timestamp">Última atualização registrada: ${escapeHtml(formatarData(d.atualizadoEm, 'Data não disponível'))}</div>
@@ -750,52 +1069,73 @@ function renderDecisionDetail(d) {
         </div>
 
         ${renderSecaoChaves(d.chavesTecnicas)}
-
         ${renderSecaoIncidentesRelacionados(d.incidentesRelacionadosIds)}
 
         <div class="doc-section">
-            <div class="doc-section-title">Evidências e Histórico Formal</div>
+            <div class="doc-section-title">Evidências Vinculadas</div>
             <div class="evidence-table">${renderEvidencias(d.evidencias, 'Nenhuma evidência anexada.')}</div>
+        </div>
+
+        <div class="doc-section">
+            <div class="doc-section-title">Histórico Imutável &amp; Restauração de Versões</div>
+            <div id="decision-history-${escapeHtml(d.topicoId)}">${historicoHtml}</div>
         </div>
     `;
 }
 
-function renderIncidentsView(container) {
-    const incidentes = appStore.get('incidentes');
-    const selectedId = appStore.get('selectedIncidentId');
-    const selected = incidentes.find(i => i.incidenteId === selectedId) || incidentes[0];
+// --- Incidentes ---
 
-    if (incidentes.length === 0) {
+function renderListaIncidentesHtml() {
+    const todos = appStore.get('incidentes');
+    const filtrados = filtrarLista(todos, i => [i.titulo, i.resumo, i.incidenteId, ...(i.chavesTecnicas || [])]);
+    const selectedId = appStore.get('selectedIncidentId');
+    const selected = filtrados.find(i => i.incidenteId === selectedId) || filtrados[0];
+
+    if (filtrados.length === 0) {
+        return `<div style="padding:1.5rem;text-align:center;color:var(--text-tertiary);font-size:0.82rem;">Nenhum incidente corresponde ao filtro.</div>`;
+    }
+
+    return filtrados.map(i => {
+        const isSel = selected && i.incidenteId === selected.incidenteId;
+        return `
+            <div class="record-list-item ${isSel ? 'selected' : ''}" role="button" tabindex="0" data-action="select-incident" data-incident-id="${escapeHtml(i.incidenteId)}">
+                <div class="record-item-top">
+                    <span class="record-item-topic">${escapeHtml(nomeProjeto(i.projetoId))}</span>
+                    <span class="record-item-version">v${escapeHtml(i.versaoFluxo)}</span>
+                </div>
+                <div class="record-item-title">${escapeHtml(i.titulo)}</div>
+                <div class="record-item-summary">${escapeHtml(i.resumo)}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function renderIncidentsView(container) {
+    const todos = appStore.get('incidentes');
+    if (todos.length === 0) {
         container.innerHTML = estadoVazio(
             'Nenhum incidente registrado',
-            'Nenhum relato de incidente foi submetido via ferramenta <code>log_incident</code>.'
+            'Nenhum relato de incidente foi submetido via ferramenta <code>log_incident</code>.',
+            Icons.incidents
         );
         return;
     }
 
+    const filtrados = filtrarLista(todos, i => [i.titulo, i.resumo, i.incidenteId, ...(i.chavesTecnicas || [])]);
+    const selectedId = appStore.get('selectedIncidentId');
+    const selected = filtrados.find(i => i.incidenteId === selectedId) || filtrados[0] || null;
+
     container.innerHTML = `
         <div class="split-view">
             <div class="split-pane-list">
-                <div style="font-size:0.72rem;font-weight:600;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:0.04em;padding:4px 8px 8px;">
-                    Incidentes (${incidentes.length})
+                ${renderFiltroPainel('Incidentes', filtrados.length, 'Filtrar incidentes...')}
+                <div class="split-pane-scroll">
+                    ${renderListaIncidentesHtml()}
                 </div>
-                ${incidentes.map(i => {
-                    const isSel = selected && i.incidenteId === selected.incidenteId;
-                    return `
-                        <div class="record-list-item ${isSel ? 'selected' : ''}" role="button" tabindex="0" data-action="select-incident" data-incident-id="${escapeHtml(i.incidenteId)}">
-                            <div class="record-item-top">
-                                <span class="record-item-topic">${escapeHtml(String(i.incidenteId || '').slice(0, 8))}...</span>
-                                <span class="record-item-version">v${escapeHtml(i.versaoFluxo)}</span>
-                            </div>
-                            <div class="record-item-title">${escapeHtml(i.titulo)}</div>
-                            <div class="record-item-summary">${escapeHtml(i.resumo)}</div>
-                        </div>
-                    `;
-                }).join('')}
             </div>
 
             <div class="split-pane-detail">
-                ${selected ? renderIncidentDetail(selected) : ''}
+                ${selected ? renderIncidentDetail(selected) : estadoVazio('Nenhum resultado', 'Ajuste o filtro para exibir incidentes.', Icons.incidents)}
             </div>
         </div>
     `;
@@ -806,8 +1146,11 @@ function renderIncidentDetail(inc) {
         <div class="doc-view-header">
             <div class="doc-meta-tags">
                 ${pillSituacao(SITUACAO_INCIDENTE, inc.situacao, SITUACAO_INCIDENTE.reported)}
-                <span style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-tertiary);">id: ${escapeHtml(inc.incidenteId)}</span>
-                <span style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-tertiary);">versão ${escapeHtml(inc.versaoFluxo)}</span>
+                <span class="mono-tag">projeto: ${escapeHtml(nomeProjeto(inc.projetoId))}</span>
+                <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(inc.incidenteId)}" data-copy-label="Incident ID">
+                    ${Icons.copy} ID: ${escapeHtml(inc.incidenteId)}
+                </button>
+                <span class="mono-tag">v${escapeHtml(inc.versaoFluxo)}</span>
             </div>
             <h1 class="doc-title">${escapeHtml(inc.titulo)}</h1>
             <div class="doc-timestamp">Ocorrido em: ${escapeHtml(formatarData(inc.ocorridoEm, 'Data não informada'))}</div>
@@ -827,6 +1170,8 @@ function renderIncidentDetail(inc) {
     `;
 }
 
+// --- Linha do Tempo ---
+
 const TIPO_EVENTO = {
     DecisionProposed: { rotulo: 'Proposta', classe: 'proposed-state' },
     DecisionApproved: { rotulo: 'Aprovado', classe: 'active-state' },
@@ -844,34 +1189,63 @@ function classificarEvento(tipo) {
 }
 
 function renderTimelineView(container) {
-    const eventos = appStore.get('eventos') || [];
+    const todos = appStore.get('eventos') || [];
+    const filtro = appStore.get('timelineFilter') || 'all';
+    const eventos = filtro === 'all' ? todos : todos.filter(e => e && e.tipo === filtro);
+
+    const pills = [
+        { id: 'all', label: `Todos (${todos.length})` },
+        { id: 'DecisionProposed', label: 'Propostas' },
+        { id: 'DecisionApproved', label: 'Aprovações' },
+        { id: 'DecisionRejected', label: 'Rejeições' },
+        { id: 'IncidentReported', label: 'Incidentes' }
+    ];
+
     container.innerHTML = `
         <div class="overview-view">
             <div class="overview-hero">
                 <div class="overview-badge">Trilha Auditável Event Sourced</div>
                 <h1 class="overview-title">Histórico de Eventos Imutáveis</h1>
-                <p class="overview-desc">Registro permanente e append-only de todas as transações, propostas e validações ocorridas neste espaço de trabalho.</p>
+                <p class="overview-desc">Registro permanente e append-only de todas as propostas, aprovações, rejeições e incidentes neste workspace.</p>
             </div>
+
+            <div class="filter-pills-row">
+                ${pills.map(p => `
+                    <button type="button" class="filter-pill-btn ${filtro === p.id ? 'active' : ''}" data-action="set-timeline-filter" data-filter="${p.id}">
+                        ${escapeHtml(p.label)}
+                    </button>
+                `).join('')}
+            </div>
+
             <div class="overview-section">
-                <div class="overview-section-title">Eventos Recentes (${eventos.length})</div>
+                <div class="overview-section-header">
+                    <div class="overview-section-title">Eventos (${eventos.length})</div>
+                </div>
                 ${eventos.length === 0 ? `
-                    <div style="padding: 2.5rem; text-align: center; color: var(--text-tertiary); font-size: 0.88rem;">
-                        Nenhum evento registrado no histórico do workspace no momento.
+                    <div class="panel-card" style="text-align:center;color:var(--text-tertiary);">
+                        Nenhum evento encontrado para o filtro selecionado.
                     </div>
                 ` : eventos.map(ev => {
                     const info = classificarEvento(ev.tipo);
+                    const ehInc = ev.tipo === 'IncidentReported';
+                    const action = ehInc ? 'open-incident' : 'open-decision';
+                    const attrId = ehInc
+                        ? `data-incident-id="${escapeHtml(ev.fluxoId)}"`
+                        : `data-topic-id="${escapeHtml(ev.fluxoId)}"`;
+
                     return `
-                        <div class="overview-list-row" style="cursor:default;">
+                        <div class="overview-list-row" role="button" tabindex="0" data-action="${action}" ${attrId}>
                             <div class="overview-row-left">
-                                <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+                                <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;flex-wrap:wrap;">
                                     <span class="status-pill ${info.classe}">${escapeHtml(info.rotulo)}</span>
                                     <span class="overview-row-title">${escapeHtml(ev.tipo)}</span>
-                                    <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-tertiary);">v${escapeHtml(ev.versaoFluxo)}</span>
+                                    <span class="mono-tag">v${escapeHtml(ev.versaoFluxo)}</span>
                                 </div>
-                                <span class="overview-row-sub">Autor: ${escapeHtml(ev.autorSujeito)} • Cliente: ${escapeHtml(ev.clienteId || 'sessão web')}</span>
+                                <span class="overview-row-sub">${escapeHtml(nomeProjeto(ev.projetoId))} &bull; Autor: ${escapeHtml(ev.autorSujeito)} &bull; Cliente: ${escapeHtml(ev.clienteId || 'sessão web')}</span>
                             </div>
                             <div class="overview-row-right">
-                                <span style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-tertiary);">${escapeHtml(formatarData(ev.registradoEm))}</span>
+                                <span class="mono-tag">${escapeHtml(formatarData(ev.registradoEm))}</span>
+                                <span style="color:var(--text-tertiary);">${Icons.chevronRight}</span>
                             </div>
                         </div>
                     `;
@@ -881,37 +1255,449 @@ function renderTimelineView(container) {
     `;
 }
 
+// --- Conectar Agentes MCP & Auditoria de Comprovantes ---
+
+function gerarConfigClienteMcp(cliente, origin, tokenExemplo, wsId, projId) {
+    const mcpUrl = `${origin}/mcp`;
+    switch (cliente) {
+        case 'codex':
+            return {
+                titulo: 'OpenAI Codex (CLI & Extensão VS Code / ~/.codex/config.toml)',
+                codigo: `# Opção A — CLI com variável de ambiente (defina SENTINEL_MCP_TOKEN antes):
+codex mcp add sentinel --url ${mcpUrl} --bearer-token-env-var SENTINEL_MCP_TOKEN
+
+# Opção B — ~/.codex/config.toml (ideal no Windows para extensão VS Code):
+[mcp_servers.sentinel]
+url = "${mcpUrl}"
+
+[mcp_servers.sentinel.http_headers]
+Authorization = "Bearer ${tokenExemplo}"
+
+# Opção C — STDIO local sem conflito de porta HTTP:
+# codex mcp add sentinel --env ASPNETCORE_ENVIRONMENT=Development --env SENTINEL_MCP_TOKEN=${tokenExemplo} -- dotnet run --no-build --no-launch-profile --project src/Sentinel.Api -- --stdio
+
+# Prompt sugerido no Codex:
+# "Use list_workspaces e query_context no Sentinel antes de alterar o código (workspaceId=${wsId}, projectId=${projId})."`
+            };
+        case 'claude':
+            return {
+                titulo: 'Claude Code (Streamable HTTP)',
+                codigo: `claude mcp add --transport http sentinel ${mcpUrl} \\
+  --header "Authorization: Bearer ${tokenExemplo}"`
+            };
+        case 'cursor':
+            return {
+                titulo: '.cursor/mcp.json',
+                codigo: JSON.stringify({
+                    mcpServers: {
+                        sentinel: {
+                            url: mcpUrl,
+                            headers: { Authorization: `Bearer ${tokenExemplo}` }
+                        }
+                    }
+                }, null, 2)
+            };
+        case 'gemini':
+            return {
+                titulo: '~/.gemini/settings.json (Gemini CLI)',
+                codigo: JSON.stringify({
+                    mcpServers: {
+                        sentinel: {
+                            httpUrl: mcpUrl,
+                            headers: { Authorization: `Bearer ${tokenExemplo}` }
+                        }
+                    }
+                }, null, 2)
+            };
+        case 'vscode':
+            return {
+                titulo: '.vscode/mcp.json (VS Code / Copilot)',
+                codigo: JSON.stringify({
+                    servers: {
+                        sentinel: {
+                            type: 'http',
+                            url: mcpUrl,
+                            headers: { Authorization: `Bearer ${tokenExemplo}` }
+                        }
+                    }
+                }, null, 2)
+            };
+        default:
+            return {
+                titulo: 'HTTP JSON-RPC direto (curl / PowerShell)',
+                codigo: `curl -X POST ${mcpUrl} \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${tokenExemplo}" \\
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_workspaces","arguments":{}}}'`
+            };
+    }
+}
+
 function renderMcpView(container) {
+    const ws = appStore.get('workspace');
+    const projetos = appStore.get('projetos') || [];
+    const wsId = ws ? ws.id : '11111111-1111-1111-1111-111111111111';
+    const projId = projetos.length > 0 ? projetos[0].id : 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+    const origin = window.location.origin;
+    const clienteAtivo = appStore.get('activeMcpClient') || 'codex';
+    const tokenExemplo = `mock:agent-dev-1|read:memory,write:decision,write:incident|${clienteAtivo}`;
+    const snippet = gerarConfigClienteMcp(clienteAtivo, origin, tokenExemplo, wsId, projId);
+    const recibo = appStore.get('receiptPreview');
+
+    const tabs = [
+        { id: 'codex', label: 'OpenAI Codex' },
+        { id: 'claude', label: 'Claude Code' },
+        { id: 'cursor', label: 'Cursor IDE' },
+        { id: 'gemini', label: 'Gemini CLI' },
+        { id: 'vscode', label: 'VS Code' },
+        { id: 'curl', label: 'HTTP / curl' }
+    ];
+
     const tools = [
-        { name: 'propose_decision', desc: 'Submete uma proposta arquitetural para um tópico com evidências e justificativa.' },
-        { name: 'log_incident', desc: 'Registra o relato de um incidente com referências técnicas, RCA e correções.' },
-        { name: 'query_context', desc: 'Recupera decisões vigentes e incidentes relevantes com busca textual e emite um comprovante da consulta.' },
-        { name: 'get_timeline', desc: 'Consulta a linha do tempo cronológica de eventos de um tópico de decisão ou incidente.' },
-        { name: 'get_context_receipt', desc: 'Recupera o comprovante de uma consulta: versões dos registros entregues e digest SHA-256 do conteúdo.' }
+        { name: 'list_workspaces', mode: 'readOnly', scope: 'read:memory', desc: 'Descobre workspaces, papéis e projetos acessíveis à identidade do agente sem precisar decorar UUIDs.' },
+        { name: 'query_context', mode: 'readOnly', scope: 'read:memory', desc: 'Busca decisões vigentes e incidentes relevantes (priorizando technicalKeys exatas) e emite comprovante SHA-256.' },
+        { name: 'get_timeline', mode: 'readOnly', scope: 'read:memory', desc: 'Reconstitui deterministicamente o estado de uma decisão ou incidente em qualquer versão histórica.' },
+        { name: 'get_context_receipt', mode: 'readOnly', scope: 'read:memory', desc: 'Audita o comprovante de uma consulta recalculando o digest SHA-256 sobre os itens retornados.' },
+        { name: 'propose_decision', mode: 'write', scope: 'write:decision', desc: 'Submete uma proposta arquitetural com expectedVersion, idempotencyKey e evidências HTTPS para aprovação humana.' },
+        { name: 'log_incident', mode: 'write', scope: 'write:incident', desc: 'Registra incidente técnico com chaves técnicas, data da ocorrência e evidências HTTPS (RCA/PR).' }
     ];
 
     container.innerHTML = `
         <div class="overview-view">
             <div class="overview-hero">
-                <div class="overview-badge">Protocolo Streamable HTTP</div>
-                <h1 class="overview-title">Servidor MCP Ativo</h1>
-                <p class="overview-desc">Endpoint oficial exposto em <code>/mcp</code> com autenticação Bearer e isolamento por workspace.</p>
+                <div class="overview-badge">MCP 2025-11-25 &bull; Streamable HTTP &amp; SDK Oficial</div>
+                <h1 class="overview-title">Conectar Agentes e Modelos (MCP)</h1>
+                <p class="overview-desc">
+                    Endpoints ativos: <code>POST ${escapeHtml(origin)}/mcp</code> (stateless), <code>${escapeHtml(origin)}/mcp/sse</code> (SDK oficial) e modo CLI <code>--stdio</code>.
+                    Em produção, substitua o token <code>mock:</code> por chave de API (<code>Sentinel:ApiKeys</code>) ou JWT OAuth.
+                </p>
             </div>
+
             <div class="overview-section">
-                <div class="overview-section-title">Ferramentas Disponíveis (${tools.length})</div>
+                <div class="overview-section-header">
+                    <div class="overview-section-title">Configuração Pronta por Cliente</div>
+                    <div class="tech-keys-wrap">
+                        <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(origin)}/mcp" data-copy-label="URL MCP">
+                            ${Icons.copy} ${escapeHtml(origin)}/mcp
+                        </button>
+                        <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(wsId)}" data-copy-label="Workspace ID">
+                            ${Icons.copy} WS: ${escapeHtml(wsId.slice(0, 8))}...
+                        </button>
+                    </div>
+                </div>
+
+                <div class="client-tabs" role="tablist">
+                    ${tabs.map(t => `
+                        <button type="button" class="client-tab-btn ${clienteAtivo === t.id ? 'active' : ''}" data-action="set-mcp-client" data-client="${t.id}">
+                            ${escapeHtml(t.label)}
+                        </button>
+                    `).join('')}
+                </div>
+
+                <div class="code-panel">
+                    <div class="code-panel-header">
+                        <span>${escapeHtml(snippet.titulo)}</span>
+                        <button type="button" class="btn-macos btn-macos-secondary btn-macos-sm" data-action="copy-element" data-copy-target="mcp-snippet-code" data-copy-label="Configuração">
+                            ${Icons.copy} Copiar
+                        </button>
+                    </div>
+                    <pre id="mcp-snippet-code" class="code-panel-pre">${escapeHtml(snippet.codigo)}</pre>
+                </div>
+            </div>
+
+            <div class="overview-section">
+                <div class="overview-section-header">
+                    <div class="overview-section-title">Auditor de Comprovantes (SHA-256)</div>
+                </div>
+                <div class="panel-card">
+                    <form data-action="verify-receipt" class="form-grid">
+                        <div class="form-field">
+                            <label for="receipt-project-select">Projeto</label>
+                            <select id="receipt-project-select" class="form-input" required>
+                                ${projetos.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.nome)} (${escapeHtml(p.slug)})</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="form-field">
+                            <label for="receipt-query-id">ID da Consulta (queryId)</label>
+                            <input id="receipt-query-id" type="text" class="form-input" placeholder="UUID retornado por query_context" required value="${escapeHtml(recibo && recibo.queryId ? recibo.queryId : '')}">
+                        </div>
+                        <div>
+                            <button type="submit" class="btn-macos btn-macos-primary">Verificar Comprovante</button>
+                        </div>
+                    </form>
+                    ${recibo ? renderResultadoComprovanteHtml(recibo) : ''}
+                </div>
+            </div>
+
+            <div class="overview-section">
+                <div class="overview-section-header">
+                    <div class="overview-section-title">Catálogo de Ferramentas, Recursos &amp; Prompts (${tools.length} tools)</div>
+                </div>
                 ${tools.map(t => `
                     <div class="mcp-tool-card">
                         <div class="mcp-tool-header">
                             <span class="mcp-tool-name">${escapeHtml(t.name)}</span>
-                            <span style="font-size:0.7rem;color:var(--status-success);font-weight:600;">Ativo</span>
+                            <div class="mcp-tool-badges">
+                                <span class="mono-tag">${escapeHtml(t.scope)}</span>
+                                <span class="status-pill ${t.mode === 'readOnly' ? 'active-state' : 'proposed-state'}">${t.mode === 'readOnly' ? 'Somente Leitura' : 'Escrita'}</span>
+                            </div>
                         </div>
                         <p class="mcp-tool-desc">${escapeHtml(t.desc)}</p>
+                    </div>
+                `).join('')}
+                <div class="mcp-tool-card">
+                    <div class="mcp-tool-header">
+                        <span class="mcp-tool-name">Resources &amp; Prompts MCP</span>
+                        <span class="status-pill info-state">Descoberta Guiada</span>
+                    </div>
+                    <p class="mcp-tool-desc">
+                        Resources: <code>sentinel://workspaces</code>, <code>sentinel://guide</code>, <code>sentinel://workspaces/{workspaceId}/projects/{projectId}/decisions|incidents</code>.
+                        Prompts: <code>consult_context_before_change</code>, <code>propose_architecture_decision</code>, <code>report_incident_rca</code>.
+                    </p>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderResultadoComprovanteHtml(r) {
+    if (r.erro) {
+        return `<div class="receipt-box"><span class="status-pill rejected-state">${escapeHtml(r.erro)}</span></div>`;
+    }
+    return `
+        <div class="receipt-box">
+            <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;">
+                <span class="status-pill ${r.integrityVerified ? 'active-state' : 'rejected-state'}">
+                    ${r.integrityVerified ? 'Integridade SHA-256 Verificada' : 'Falha na Integridade'}
+                </span>
+                <span class="mono-tag">${escapeHtml(formatarData(r.createdAt))}</span>
+            </div>
+            <div style="font-size:0.78rem;color:var(--text-secondary);margin-bottom:6px;">
+                Autor: <strong>${escapeHtml(r.principalId)}</strong> (${escapeHtml(r.clientId || '—')}) &bull; Modo: <code>${escapeHtml(r.searchMode)}</code>
+            </div>
+            <div class="mono-tag" style="word-break:break-all;margin-bottom:8px;">SHA-256: ${escapeHtml(r.digest)}</div>
+            <div style="font-size:0.76rem;color:var(--text-secondary);">Itens entregues (${(r.items || []).length}):</div>
+            ${(r.items || []).map(i => `
+                <div class="mono-tag" style="margin-top:4px;display:block;">
+                    #${escapeHtml(i.position)} [${escapeHtml(i.recordType)}] fluxo=${escapeHtml(i.streamId)} &bull; reg v${escapeHtml(i.recordVersion)} / fluxo v${escapeHtml(i.streamVersion)} (${escapeHtml(i.status)})
+                </div>
+            `).join('')}
+        </div>
+    `;
+}
+
+async function executarAuditoriaComprovante() {
+    const ws = appStore.get('workspace');
+    const projEl = document.getElementById('receipt-project-select');
+    const qEl = document.getElementById('receipt-query-id');
+    if (!ws || !projEl || !qEl) return;
+
+    const res = await buscarComprovante(ws.id, projEl.value, qEl.value.trim());
+    if (res.status === 401) {
+        redirecionarParaLogin();
+        return;
+    }
+    if (res.ok) {
+        appStore.set('receiptPreview', res.dados);
+    } else {
+        appStore.set('receiptPreview', { queryId: qEl.value.trim(), erro: (res.erro && res.erro.message) || `Não encontrado (HTTP ${res.status})` });
+    }
+}
+
+// --- Administração do Workspace ---
+
+function renderAdminView(container) {
+    const ws = appStore.get('workspace');
+    if (!podeRevisar()) {
+        container.innerHTML = `
+            <div class="overview-view">
+                <div class="overview-hero">
+                    <div class="overview-badge">Acesso Restrito</div>
+                    <h1 class="overview-title">Administração do Workspace</h1>
+                    <p class="overview-desc">A gestão de projetos e vínculos de agentes/usuários exige papel <strong>Maintainer</strong> neste espaço de trabalho.</p>
+                </div>
+                <div class="review-permission-notice">${Icons.shieldCheck} ${escapeHtml(AVISO_SOMENTE_MAINTAINERS)}.</div>
+            </div>
+        `;
+        return;
+    }
+
+    const detalhes = appStore.get('adminDetails');
+    if (ws && (!detalhes || !detalhes.workspace || detalhes.workspace.workspaceId !== ws.id) && adminLoadingWsId !== ws.id) {
+        carregarAdminWorkspace(ws.id);
+    }
+
+    const projetos = detalhes ? (detalhes.projects || []) : (appStore.get('projetos') || []);
+    const vinculos = detalhes ? (detalhes.memberships || []) : [];
+
+    container.innerHTML = `
+        <div class="overview-view">
+            <div class="overview-hero">
+                <div class="overview-badge">Governança &bull; ${escapeHtml(ws ? ws.nome : '')}</div>
+                <h1 class="overview-title">Projetos e Vínculos de Acesso</h1>
+                <p class="overview-desc">Crie projetos e gerencie identidades (agentes Codex, Claude, Cursor ou revisores humanos) com isolamento RLS garantido por workspace.</p>
+            </div>
+
+            <div class="overview-section">
+                <div class="overview-section-header">
+                    <div class="overview-section-title">Projetos do Workspace (${projetos.length})</div>
+                </div>
+
+                <div class="panel-card">
+                    <form data-action="create-project" class="form-grid">
+                        <div class="form-field">
+                            <label for="admin-proj-name">Nome do Projeto</label>
+                            <input id="admin-proj-name" type="text" class="form-input" maxlength="120" required placeholder="Ex.: Checkout Pix">
+                        </div>
+                        <div class="form-field">
+                            <label for="admin-proj-slug">Slug ASCII</label>
+                            <input id="admin-proj-slug" type="text" class="form-input" maxlength="80" required placeholder="checkout-pix">
+                        </div>
+                        <div>
+                            <button type="submit" class="btn-macos btn-macos-primary">Criar Projeto</button>
+                        </div>
+                    </form>
+                </div>
+
+                ${projetos.map(p => {
+                    const id = p.projectId || p.id;
+                    const nome = p.name || p.nome;
+                    const slug = p.slug;
+                    return `
+                        <div class="overview-list-row" style="cursor:default;">
+                            <div class="overview-row-left">
+                                <span class="overview-row-title">${escapeHtml(nome)}</span>
+                                <span class="overview-row-sub">slug: <code>${escapeHtml(slug)}</code></span>
+                            </div>
+                            <div class="overview-row-right">
+                                <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(id)}" data-copy-label="Project ID">
+                                    ${Icons.copy} ${escapeHtml(id)}
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
+
+            <div class="overview-section">
+                <div class="overview-section-header">
+                    <div class="overview-section-title">Vínculos / Memberships (${vinculos.length})</div>
+                    <div class="tech-keys-wrap">
+                        <button type="button" class="filter-pill-btn" data-action="apply-membership-preset" data-issuer="https://auth.sentinel.dev" data-subject="codex-agent" data-role="Contributor">+ Preset Codex</button>
+                        <button type="button" class="filter-pill-btn" data-action="apply-membership-preset" data-issuer="https://auth.sentinel.dev" data-subject="reviewer-humano" data-role="Maintainer">+ Preset Mantenedor</button>
+                    </div>
+                </div>
+
+                <div class="panel-card">
+                    <form data-action="save-membership" class="form-grid">
+                        <div class="form-field">
+                            <label for="admin-member-issuer">Emissor (Issuer URL)</label>
+                            <input id="admin-member-issuer" type="url" class="form-input" required value="https://auth.sentinel.dev">
+                        </div>
+                        <div class="form-field">
+                            <label for="admin-member-subject">Sujeito (sub / agent-id)</label>
+                            <input id="admin-member-subject" type="text" class="form-input" maxlength="120" required placeholder="codex-agent">
+                        </div>
+                        <div class="form-field">
+                            <label for="admin-member-role">Papel</label>
+                            <select id="admin-member-role" class="form-input">
+                                <option value="Reader">Reader (Leitura)</option>
+                                <option value="Contributor" selected>Contributor (Propõe decisões)</option>
+                                <option value="Maintainer">Maintainer (Aprova &amp; Administra)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <button type="submit" class="btn-macos btn-macos-primary">Salvar Vínculo</button>
+                        </div>
+                    </form>
+                </div>
+
+                ${vinculos.length === 0 ? `
+                    <div class="panel-card" style="text-align:center;color:var(--text-tertiary);">
+                        ${detalhes ? 'Nenhum vínculo cadastrado.' : 'Carregando vínculos do workspace...'}
+                    </div>
+                ` : vinculos.map(m => `
+                    <div class="overview-list-row" style="cursor:default;">
+                        <div class="overview-row-left">
+                            <span class="overview-row-title">${escapeHtml(m.subject)}</span>
+                            <span class="overview-row-sub">Emissor: <code>${escapeHtml(m.issuer)}</code> &bull; ${m.isActive ? 'Ativo' : 'Inativo'}</span>
+                        </div>
+                        <div class="overview-row-right">
+                            <span class="status-pill ${m.role === 'Maintainer' ? 'active-state' : (m.role === 'Contributor' ? 'proposed-state' : 'reported-state')}">${escapeHtml(m.role)}</span>
+                            <button type="button" class="btn-macos btn-macos-danger btn-macos-sm"
+                                data-action="delete-membership"
+                                data-membership-id="${escapeHtml(m.membershipId)}"
+                                data-subject="${escapeHtml(m.subject)}">
+                                ${Icons.trash} Remover
+                            </button>
+                        </div>
                     </div>
                 `).join('')}
             </div>
         </div>
     `;
 }
+
+async function carregarAdminWorkspace(wsId) {
+    adminLoadingWsId = wsId;
+    try {
+        const res = await buscarDetalhesWorkspaceAdmin(wsId);
+        if (res.status === 401) {
+            redirecionarParaLogin();
+            return;
+        }
+        if (res.ok && res.dados) {
+            appStore.set('adminDetails', res.dados);
+        }
+    } finally {
+        adminLoadingWsId = null;
+    }
+}
+
+async function executarCriacaoProjeto(form) {
+    const ws = appStore.get('workspace');
+    const nameEl = document.getElementById('admin-proj-name');
+    const slugEl = document.getElementById('admin-proj-slug');
+    if (!ws || !nameEl || !slugEl) return;
+
+    const res = await criarProjetoAdmin(ws.id, nameEl.value.trim(), slugEl.value.trim(), appStore.get('csrf'));
+    if (res.status === 401) {
+        redirecionarParaLogin();
+        return;
+    }
+    if (!res.ok) {
+        mostrarToast((res.erro && res.erro.message) || 'Não foi possível criar o projeto.', 'erro');
+        return;
+    }
+    mostrarToast('Projeto criado com sucesso.', 'sucesso');
+    form.reset();
+    delete slugEl.dataset.edited;
+    await recarregarEstado();
+    await carregarAdminWorkspace(ws.id);
+}
+
+async function executarSalvarVinculo(form) {
+    const ws = appStore.get('workspace');
+    const issEl = document.getElementById('admin-member-issuer');
+    const subEl = document.getElementById('admin-member-subject');
+    const roleEl = document.getElementById('admin-member-role');
+    if (!ws || !issEl || !subEl || !roleEl) return;
+
+    const res = await configurarVinculoAdmin(ws.id, issEl.value.trim(), subEl.value.trim(), roleEl.value, true, appStore.get('csrf'));
+    if (res.status === 401) {
+        redirecionarParaLogin();
+        return;
+    }
+    if (!res.ok) {
+        mostrarToast((res.erro && res.erro.message) || 'Não foi possível configurar o vínculo.', 'erro');
+        return;
+    }
+    mostrarToast(`Vínculo de '${subEl.value.trim()}' salvo como ${roleEl.value}.`, 'sucesso');
+    subEl.value = '';
+    await carregarAdminWorkspace(ws.id);
+}
+
+// --- Configurações ---
 
 function renderSettingsView(container) {
     const isDark = appStore.get('theme') === 'dark';
@@ -920,13 +1706,13 @@ function renderSettingsView(container) {
 
     container.innerHTML = `
         <div class="settings-view">
-            <h1 class="overview-title" style="margin-bottom: 2rem;">Preferências do Sistema</h1>
+            <h1 class="overview-title" style="margin-bottom: 1.5rem;">Preferências do Sistema</h1>
 
             <div class="settings-group">
                 <div class="settings-row">
                     <div class="settings-row-text">
                         <span class="settings-label">Modo Escuro (Dark Mode)</span>
-                        <span class="settings-caption">Ajusta o contraste do sistema entre o tema escuro e claro.</span>
+                        <span class="settings-caption">Ajusta o contraste do sistema entre tema escuro e claro.</span>
                     </div>
                     <label class="macos-switch">
                         <input type="checkbox" id="switch-theme" data-action="toggle-theme" ${isDark ? 'checked' : ''}>
@@ -935,8 +1721,8 @@ function renderSettingsView(container) {
                 </div>
                 <div class="settings-row">
                     <div class="settings-row-text">
-                        <span class="settings-label">Painel de Inspeção</span>
-                        <span class="settings-caption">Exibe metadados técnicos e recibos à direita da janela principal.</span>
+                        <span class="settings-label">Painel Inspetor Lateral</span>
+                        <span class="settings-caption">Exibe metadados técnicos, IDs e garantias à direita da janela principal.</span>
                     </div>
                     <label class="macos-switch">
                         <input type="checkbox" id="switch-inspector" data-action="toggle-inspector" ${isInspector ? 'checked' : ''}>
@@ -948,29 +1734,31 @@ function renderSettingsView(container) {
             <div class="settings-group">
                 <div class="settings-row">
                     <div class="settings-row-text">
-                        <span class="settings-label">Identidade do Revisor Humano</span>
+                        <span class="settings-label">Identidade do Revisor</span>
                         <span class="settings-caption">Usuário autenticado na sessão web atual.</span>
                     </div>
-                    <span style="font-family:var(--font-mono);font-size:0.8rem;color:var(--text-secondary);">${escapeHtml(usuario.sujeito || '—')}</span>
+                    <span class="mono-tag">${escapeHtml(usuario.sujeito || '—')}</span>
                 </div>
                 <div class="settings-row">
                     <div class="settings-row-text">
                         <span class="settings-label">Papel no Espaço de Trabalho</span>
-                        <span class="settings-caption">${escapeHtml(podeRevisar() ? 'Pode aprovar e rejeitar propostas.' : AVISO_SOMENTE_MAINTAINERS + '.')}</span>
+                        <span class="settings-caption">${escapeHtml(podeRevisar() ? 'Pode aprovar, rejeitar, restaurar versões e administrar.' : AVISO_SOMENTE_MAINTAINERS + '.')}</span>
                     </div>
-                    <span style="font-family:var(--font-mono);font-size:0.8rem;color:var(--text-secondary);">${escapeHtml(usuario.papel || '—')}</span>
+                    <span class="mono-tag">${escapeHtml(usuario.papel || '—')}</span>
                 </div>
                 <div class="settings-row">
                     <div class="settings-row-text">
-                        <span class="settings-label">Provedor de Identidade (Issuer)</span>
-                        <span class="settings-caption">Serviço emissor de tokens de segurança.</span>
+                        <span class="settings-label">Emissor (Issuer)</span>
+                        <span class="settings-caption">Provedor de identidade da sessão.</span>
                     </div>
-                    <span style="font-family:var(--font-mono);font-size:0.8rem;color:var(--text-secondary);">${escapeHtml(usuario.emissor || '—')}</span>
+                    <span class="mono-tag">${escapeHtml(usuario.emissor || '—')}</span>
                 </div>
             </div>
         </div>
     `;
 }
+
+// --- Inspetor Lateral ---
 
 function campoInspector(rotulo, valor, codigo = false) {
     return `
@@ -1005,45 +1793,41 @@ function renderInspectorContent() {
 
     if (!item) {
         inspector.innerHTML = `
-            <div style="font-size:0.75rem;font-weight:600;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:0.04em;margin-bottom:1rem;">
-                Inspetor de Metadados
-            </div>
+            <div class="doc-section-title">Inspetor de Metadados</div>
             <div style="color:var(--text-tertiary);font-size:0.82rem;line-height:1.5;">
-                Selecione um registro na lista para visualizar seus metadados técnicos e proveniência.
+                Selecione uma proposta, decisão ou incidente para visualizar metadados técnicos, IDs e proveniência.
             </div>
         `;
         return;
     }
 
     const ehProposta = view === 'reviews';
+    const fluxoId = item.topicoId || item.incidenteId;
 
     inspector.innerHTML = `
-        <div style="font-size:0.75rem;font-weight:600;text-transform:uppercase;color:var(--text-tertiary);letter-spacing:0.04em;margin-bottom:1.25rem;">
-            Inspetor de Metadados
-        </div>
+        <div class="doc-section-title" style="margin-bottom:1.15rem;">Inspetor de Metadados</div>
 
-        ${campoInspector('Tipo de Entidade', tipo)}
-        ${campoInspector('Identificador do Tópico / Fluxo', item.topicoId || item.incidenteId, true)}
+        ${campoInspector('Entidade', tipo)}
+        ${campoInspector('Projeto', nomeProjeto(item.projetoId))}
+        ${campoInspector('ID do Projeto', item.projetoId, true)}
+        ${campoInspector('ID do Tópico / Fluxo', fluxoId, true)}
         ${item.chaveTopico ? campoInspector('Chave Canônica', item.chaveTopico, true) : ''}
         ${campoInspector('Versão do Fluxo', `v${item.versaoFluxo ?? '—'}`, true)}
-        ${ehProposta && item.propostaPendenteId ? campoInspector('Proposta Pendente', item.propostaPendenteId, true) : ''}
+        ${ehProposta && item.propostaPendenteId ? campoInspector('ID da Proposta', item.propostaPendenteId, true) : ''}
         ${ehProposta ? campoInspector('Autor', item.autorSujeito || '—', true) : ''}
         ${ehProposta ? campoInspector('Cliente MCP', item.clienteId || 'não informado', true) : ''}
         ${ehProposta ? campoInspector('Proposto em', formatarData(item.propostaEm, '—')) : ''}
-        ${campoInspector('Espaço de Trabalho', item.espacoTrabalhoId, true)}
-        ${campoInspector('Evidências Anexadas', `${(Array.isArray(item.evidencias) ? item.evidencias : []).length} documento(s)`)}
+        ${campoInspector('Evidências', `${(Array.isArray(item.evidencias) ? item.evidencias : []).length} link(s) HTTPS`)}
 
         <div class="inspector-field">
             <div class="inspector-field-label">Garantia Arquitetural</div>
-            <div style="display:flex;align-items:center;gap:6px;font-size:0.8rem;color:var(--status-success);margin-top:2px;">
-                ${Icons.shieldCheck} Isolamento RLS &amp; Event Sourced
-            </div>
+            <div class="inspector-guarantee">${Icons.shieldCheck} Isolamento RLS &amp; Event Sourced</div>
         </div>
     `;
 }
 
 // ---------------------------------------------------------------------------
-// Modal de aprovação / rejeição
+// Modais (aprovar, rejeitar, restaurar, remover vínculo)
 // ---------------------------------------------------------------------------
 
 function setupModals() {
@@ -1055,14 +1839,10 @@ function setupModals() {
     }
 
     const cancelBtn = document.getElementById('modal-cancel-btn');
-    if (cancelBtn) {
-        cancelBtn.addEventListener('click', fecharModal);
-    }
+    if (cancelBtn) cancelBtn.addEventListener('click', fecharModal);
 
     const confirmBtn = document.getElementById('modal-confirm-btn');
-    if (confirmBtn) {
-        confirmBtn.addEventListener('click', confirmarOperacaoModal);
-    }
+    if (confirmBtn) confirmBtn.addEventListener('click', confirmarOperacaoModal);
 
     const motivoInput = document.getElementById('modal-reason-input');
     if (motivoInput) {
@@ -1101,7 +1881,6 @@ function prepararPayload(tipo, topicoId, propostaId) {
         topicId: proposta.topicoId,
         proposalId: proposta.propostaPendenteId,
         expectedVersion: proposta.versaoFluxo,
-        // Uma chave por abertura do modal: cliques repetidos e novas tentativas após falha de rede reutilizam a mesma chave.
         idempotencyKey: gerarChaveIdempotencia()
     };
 }
@@ -1115,7 +1894,7 @@ function abrirModalAprovacao(topicoId, propostaId) {
     const chave = payload.proposta.chaveTopico || 'deste tópico';
     document.getElementById('modal-title').textContent = 'Aprovar Decisão';
     document.getElementById('modal-desc').textContent = vigente
-        ? `Esta proposta será promovida a decisão vigente do tópico "${chave}", substituindo a decisão atual "${vigente.titulo || 'sem título'}". Deseja confirmar?`
+        ? `Esta proposta será promovida a decisão vigente do tópico "${chave}", substituindo "${vigente.titulo || 'sem título'}". Deseja confirmar?`
         : `Esta proposta será promovida a decisão vigente do tópico "${chave}". Deseja confirmar?`;
     document.getElementById('modal-input-wrap').style.display = 'none';
 
@@ -1145,6 +1924,58 @@ function abrirModalRejeicao(topicoId, propostaId) {
     definirModalOcupado(false);
     document.getElementById('modal-dialog').classList.add('visible');
     setTimeout(() => input.focus(), 50);
+}
+
+function abrirModalRestauracao(topicoId, versionToRestore) {
+    if (!podeRevisar() || operacaoEmAndamento || !topicoId || !versionToRestore) return;
+    const decisao = (appStore.get('decisoes') || []).find(d => d.topicoId === topicoId);
+    if (!decisao) return;
+
+    modalPayload = {
+        tipo: 'restaurar',
+        workspaceId: decisao.espacoTrabalhoId,
+        projectId: decisao.projetoId,
+        topicId: decisao.topicoId,
+        versionToRestore,
+        expectedVersion: decisao.versaoFluxo,
+        idempotencyKey: gerarChaveIdempotencia()
+    };
+
+    document.getElementById('modal-title').textContent = `Restaurar Versão v${versionToRestore}`;
+    document.getElementById('modal-desc').textContent =
+        `Será criada uma nova proposta pendente no tópico "${decisao.chaveTopico}" baseada na decisão vigente da versão ${versionToRestore}. Ela precisará de aprovação final na aba Revisões.`;
+    document.getElementById('modal-input-wrap').style.display = 'none';
+
+    const btn = document.getElementById('modal-confirm-btn');
+    btn.className = 'btn-macos btn-macos-primary';
+    btn.textContent = 'Criar Proposta de Restauração';
+    definirModalOcupado(false);
+    document.getElementById('modal-dialog').classList.add('visible');
+    setTimeout(() => btn.focus(), 50);
+}
+
+function abrirModalRemoverVinculo(membershipId, subject) {
+    const ws = appStore.get('workspace');
+    if (!ws || !podeRevisar() || operacaoEmAndamento || !membershipId) return;
+
+    modalPayload = {
+        tipo: 'remover-vinculo',
+        workspaceId: ws.id,
+        membershipId,
+        subject: subject || membershipId
+    };
+
+    document.getElementById('modal-title').textContent = 'Remover Vínculo';
+    document.getElementById('modal-desc').textContent =
+        `Revogar imediatamente o acesso de "${subject || membershipId}" ao workspace "${ws.nome || ws.slug}"?`;
+    document.getElementById('modal-input-wrap').style.display = 'none';
+
+    const btn = document.getElementById('modal-confirm-btn');
+    btn.className = 'btn-macos btn-macos-danger';
+    btn.textContent = 'Remover Vínculo';
+    definirModalOcupado(false);
+    document.getElementById('modal-dialog').classList.add('visible');
+    setTimeout(() => btn.focus(), 50);
 }
 
 function validarMotivo(motivo) {
@@ -1187,9 +2018,30 @@ async function confirmarOperacaoModal() {
     if (!modalPayload || operacaoEmAndamento) return;
     const p = modalPayload;
 
+    if (p.tipo === 'remover-vinculo') {
+        definirModalOcupado(true);
+        try {
+            const res = await removerVinculoAdmin(p.workspaceId, p.membershipId, appStore.get('csrf'));
+            definirModalOcupado(false);
+            fecharModal();
+            if (res.status === 401) { redirecionarParaLogin(); return; }
+            if (!res.ok) {
+                mostrarToast((res.erro && res.erro.message) || 'Erro ao remover vínculo.', 'erro');
+                return;
+            }
+            mostrarToast(`Vínculo de "${p.subject}" removido.`, 'sucesso');
+            await carregarAdminWorkspace(p.workspaceId);
+        } catch (e) {
+            definirModalOcupado(false);
+            mostrarToast('Erro de comunicação ao remover vínculo.', 'erro');
+        }
+        return;
+    }
+
     let url;
     let corpo;
     let mensagemSucesso;
+    let irParaRevisoes = false;
 
     if (p.tipo === 'aprovar') {
         url = '/api/review/approve';
@@ -1221,7 +2073,19 @@ async function confirmarOperacaoModal() {
             reason: motivo,
             idempotencyKey: p.idempotencyKey
         };
-        mensagemSucesso = 'Proposta de decisão rejeitada com sucesso.';
+        mensagemSucesso = 'Proposta rejeitada e registrada na trilha de auditoria.';
+    } else if (p.tipo === 'restaurar') {
+        url = '/api/review/restore';
+        corpo = {
+            workspaceId: p.workspaceId,
+            projectId: p.projectId,
+            topicId: p.topicId,
+            versionToRestore: p.versionToRestore,
+            expectedVersion: p.expectedVersion,
+            idempotencyKey: p.idempotencyKey
+        };
+        mensagemSucesso = 'Proposta de restauração criada. Aprove-a na aba Revisões.';
+        irParaRevisoes = true;
     } else {
         return;
     }
@@ -1231,7 +2095,6 @@ async function confirmarOperacaoModal() {
     try {
         resultado = await postarJson(url, corpo, appStore.get('csrf'));
     } catch (e) {
-        // Falha de rede: mantém o modal aberto para que uma nova tentativa reutilize a mesma chave de idempotência.
         definirModalOcupado(false);
         mostrarToast('Erro de comunicação com o servidor. Tente novamente.', 'erro');
         return;
@@ -1240,6 +2103,10 @@ async function confirmarOperacaoModal() {
     definirModalOcupado(false);
     fecharModal();
     await tratarRespostaRevisao(resultado, mensagemSucesso);
+    if (irParaRevisoes && resultado.ok) {
+        appStore.set('selectedReviewId', p.topicId);
+        appStore.set('activeView', 'reviews');
+    }
 }
 
 async function tratarRespostaRevisao(resultado, mensagemSucesso) {
@@ -1255,10 +2122,10 @@ async function tratarRespostaRevisao(resultado, mensagemSucesso) {
             redirecionarParaLogin();
             return;
         case 403:
-            mostrarToast('Sem permissão', 'erro');
+            mostrarToast('Sem permissão.', 'erro');
             return;
         case 409:
-            mostrarToast(mensagemServidor || 'Conflito de versão: a proposta foi alterada por outra operação.', 'erro');
+            mostrarToast(mensagemServidor || 'Conflito de versão: o tópico foi alterado por outra operação.', 'erro');
             await recarregarEstado();
             return;
         case 400:
@@ -1273,9 +2140,6 @@ async function tratarRespostaRevisao(resultado, mensagemSucesso) {
 // Toast
 // ---------------------------------------------------------------------------
 
-/**
- * Exibe um toast. `tipo`: 'sucesso' | 'erro' | 'info'.
- */
 export function mostrarToast(mensagem, tipo = 'sucesso') {
     const container = document.getElementById('toast-container');
     if (!container) return;

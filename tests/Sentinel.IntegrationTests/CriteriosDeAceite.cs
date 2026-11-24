@@ -70,7 +70,14 @@ public abstract class CriteriosDeAceiteBase
         Assert.Equal(string.Empty, await notificacao.Content.ReadAsStringAsync());
 
         var lista = await mcp.RpcAsync("tools/list", null, TokenAgente);
-        Assert.Equal(5, lista.GetProperty("result").GetProperty("tools").GetArrayLength());
+        Assert.Equal(6, lista.GetProperty("result").GetProperty("tools").GetArrayLength());
+
+        // Descoberta de workspaces e projetos por agente (ex.: Codex)
+        var espacos = (await mcp.ToolAsync("list_workspaces", new { }, "mock:sec-agent-1|read:memory|codex")).Sucesso();
+        var listaWs = espacos.GetProperty("workspaces").EnumerateArray().ToList();
+        Assert.Single(listaWs);
+        Assert.Equal(WsB, listaWs[0].GetProperty("workspaceId").GetGuid());
+        Assert.Equal(ProjB, listaWs[0].GetProperty("projects")[0].GetProperty("projectId").GetGuid());
 
         var consulta = await ConsultarAsync(mcp, "idempotência");
         Assert.Equal("found", consulta.GetProperty("matchStatus").GetString());
@@ -259,6 +266,51 @@ public abstract class CriteriosDeAceiteBase
         // Bloqueia leitura de comprovante por terceiros
         var alheio = await mcp.ToolAsync("get_context_receipt", new { workspaceId = WsA, projectId = ProjA, queryId = consulta1.GetProperty("queryId").GetGuid() }, TokenLeitor);
         Assert.Equal("NOT_FOUND", alheio.CodigoErro());
+    }
+
+    [SkippableFact]
+    public async Task AC06_PainelWeb_RestauracaoTimelineEComprovante()
+    {
+        var mcp = Mcp();
+        var alice = await SessaoWeb.EntrarAsync(Fabrica, "maintainer-alice");
+        var topico = NovaChave("restore-web");
+        var chaveV1 = $"RESTORE_V1_{Guid.NewGuid():N}";
+
+        var p1 = await ProporAsync(mcp, topico, 0, "Decisão inicial", [chaveV1]);
+        var topicId = p1.GetProperty("topicId").GetGuid();
+        await alice.AprovarAsync(topicId, p1.GetProperty("proposalId").GetGuid(), 1);
+
+        var p2 = await ProporAsync(mcp, topico, 2, "Decisão alterada", ["OUTRA"]);
+        await alice.AprovarAsync(topicId, p2.GetProperty("proposalId").GetGuid(), 3);
+
+        // Linha do tempo via endpoint web
+        var timelineResp = await alice.Http.GetAsync($"/api/review/timeline?workspaceId={WsA}&projectId={ProjA}&kind=decision&streamId={topicId}&limit=50");
+        timelineResp.EnsureSuccessStatusCode();
+        var timeline = await timelineResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal(4, timeline.GetProperty("currentStreamVersion").GetInt32());
+        Assert.Equal(4, timeline.GetProperty("events").GetArrayLength());
+
+        // Restauração para a versão 2 do fluxo (onde a decisão inicial foi aprovada) via web com CSRF + aprovação
+        var restoreResp = await alice.PostarAsync("/api/review/restore", new
+        {
+            workspaceId = WsA,
+            projectId = ProjA,
+            topicId,
+            versionToRestore = 2,
+            expectedVersion = 4,
+            idempotencyKey = Guid.NewGuid().ToString()
+        });
+        restoreResp.EnsureSuccessStatusCode();
+        var restaurada = await restoreResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("proposed", restaurada.GetProperty("status").GetString());
+
+        await alice.AprovarAsync(topicId, restaurada.GetProperty("proposalId").GetGuid(), 5);
+        var consulta = await ConsultarAsync(mcp, chaveV1);
+        Assert.Equal("Decisão inicial", consulta.GetProperty("items")[0].GetProperty("title").GetString());
+
+        // Verificação de comprovante via agente (mesma identidade emissora)
+        var mcpReceipt = (await mcp.ToolAsync("get_context_receipt", new { workspaceId = WsA, projectId = ProjA, queryId = consulta.GetProperty("queryId").GetGuid() })).Sucesso();
+        Assert.True(mcpReceipt.GetProperty("integrityVerified").GetBoolean());
     }
 
     [SkippableFact]

@@ -52,6 +52,7 @@ public class McpContractTests : IClassFixture<FabricaContrato>
     [Theory]
     [InlineData("2024-11-05", "2024-11-05")]
     [InlineData("2025-06-18", "2025-06-18")]
+    [InlineData("2025-11-25", "2025-11-25")]
     [InlineData("1999-01-01", "2025-06-18")]
     public async Task Initialize_NegociaVersaoDoProtocolo(string pedida, string esperada)
     {
@@ -81,23 +82,25 @@ public class McpContractTests : IClassFixture<FabricaContrato>
     }
 
     [Fact]
-    public async Task ToolsList_RetornaAsCincoFerramentas()
+    public async Task ToolsList_RetornaAsSeisFerramentas()
     {
         var body = await RpcAsync(new { jsonrpc = "2.0", id = 2, method = "tools/list" });
         var tools = body.GetProperty("result").GetProperty("tools").EnumerateArray().Select(t => t.GetProperty("name").GetString()).ToList();
 
-        Assert.Equal(["propose_decision", "log_incident", "query_context", "get_timeline", "get_context_receipt"], tools);
+        Assert.Equal(["propose_decision", "log_incident", "query_context", "get_timeline", "get_context_receipt", "list_workspaces"], tools);
     }
 
     [Fact]
-    public async Task ToolsList_PublicaOutputSchemaEmTodasAsFerramentas()
+    public async Task ToolsList_PublicaOutputSchemaEAnotacoesEmTodasAsFerramentas()
     {
         var body = await RpcAsync(new { jsonrpc = "2.0", id = 2, method = "tools/list" });
         var tools = body.GetProperty("result").GetProperty("tools").EnumerateArray().ToList();
 
-        Assert.Equal(5, tools.Count);
+        Assert.Equal(6, tools.Count);
         foreach (var tool in tools)
         {
+            Assert.True(tool.TryGetProperty("annotations", out var annotations));
+            Assert.True(annotations.TryGetProperty("readOnlyHint", out _));
             Assert.True(tool.TryGetProperty("outputSchema", out var outputSchema), $"outputSchema ausente na tool {tool.GetProperty("name").GetString()}");
             Assert.Equal("object", outputSchema.GetProperty("type").GetString());
             Assert.True(outputSchema.TryGetProperty("properties", out var props));
@@ -259,6 +262,85 @@ public class McpContractTests : IClassFixture<FabricaContrato>
         Assert.True(evidencia.TryGetProperty("label", out _));
         Assert.StartsWith("https://", evidencia.GetProperty("url").GetString());
         Assert.Equal("active", item.GetProperty("status").GetString());
+    }
+
+    [Fact]
+    public async Task ListWorkspaces_SemArguments_RetornaEspacosEProjetosComTextoEstruturado()
+    {
+        var body = await RpcAsync(new
+        {
+            jsonrpc = "2.0",
+            id = 12,
+            method = "tools/call",
+            @params = new { name = "list_workspaces" }
+        });
+
+        var result = body.GetProperty("result");
+        Assert.False(result.TryGetProperty("isError", out var errFlag) && errFlag.GetBoolean());
+        var texto = result.GetProperty("content")[0].GetProperty("text").GetString()!;
+        Assert.Contains("workspaces", texto);
+        var workspaces = result.GetProperty("structuredContent").GetProperty("workspaces").EnumerateArray().ToList();
+        Assert.Single(workspaces);
+        Assert.Equal("11111111-1111-1111-1111-111111111111", workspaces[0].GetProperty("workspaceId").GetString());
+        Assert.True(workspaces[0].GetProperty("projects").GetArrayLength() >= 1);
+    }
+
+    [Fact]
+    public async Task ResourcesListTemplatesERead_RetornamCatalogoEDados()
+    {
+        var list = await RpcAsync(new { jsonrpc = "2.0", id = 13, method = "resources/list" });
+        var resources = list.GetProperty("result").GetProperty("resources").EnumerateArray().ToList();
+        Assert.Contains(resources, r => r.GetProperty("uri").GetString() == "sentinel://workspaces");
+
+        var templates = await RpcAsync(new { jsonrpc = "2.0", id = 14, method = "resources/templates/list" });
+        var listaTemplates = templates.GetProperty("result").GetProperty("resourceTemplates").EnumerateArray().ToList();
+        Assert.True(listaTemplates.Count >= 2);
+
+        var read = await RpcAsync(new
+        {
+            jsonrpc = "2.0",
+            id = 15,
+            method = "resources/read",
+            @params = new { uri = "sentinel://workspaces" }
+        });
+        var conteudo = read.GetProperty("result").GetProperty("contents")[0];
+        Assert.Equal("application/json", conteudo.GetProperty("mimeType").GetString());
+        Assert.Contains("11111111-1111-1111-1111-111111111111", conteudo.GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task PromptsListEGet_RetornamFluxoDeGovernanca()
+    {
+        var list = await RpcAsync(new { jsonrpc = "2.0", id = 16, method = "prompts/list" });
+        var prompts = list.GetProperty("result").GetProperty("prompts").EnumerateArray().ToList();
+        Assert.Contains(prompts, p => p.GetProperty("name").GetString() == "consult_context_before_change");
+
+        var get = await RpcAsync(new
+        {
+            jsonrpc = "2.0",
+            id = 17,
+            method = "prompts/get",
+            @params = new
+            {
+                name = "consult_context_before_change",
+                arguments = new { topic = "BillingService" }
+            }
+        });
+        var msgs = get.GetProperty("result").GetProperty("messages").EnumerateArray().ToList();
+        Assert.NotEmpty(msgs);
+        Assert.Contains("query_context", msgs[0].GetProperty("content").GetProperty("text").GetString());
+    }
+
+    [Fact]
+    public async Task McpSse_SemToken_Retorna401ComWwwAuthenticate()
+    {
+        var req = new HttpRequestMessage(HttpMethod.Post, "/mcp/sse")
+        {
+            Content = JsonContent.Create(new { jsonrpc = "2.0", id = 18, method = "initialize" })
+        };
+        var resp = await _client.SendAsync(req);
+        Assert.Equal(HttpStatusCode.Unauthorized, resp.StatusCode);
+        Assert.True(resp.Headers.Contains("WWW-Authenticate"));
     }
 
     [Fact]
