@@ -6,7 +6,7 @@ Aceito
 ## Contexto
 O Sentinel-MCP necessita de uma plataforma de alta performance, segura e robusta para disponibilizar um servidor MCP (Model Context Protocol) via Streamable HTTP, além de persistência transacional com suporte a controle de concorrência por linha, isolamento multilocatário seguro e busca em texto rico com identificadores técnicos.
 
-A referência de engenharia (`second-brain-mcp`) utilizou Cloudflare Workers, Durable Objects e D1/Vectorize. No entanto, para ambientes corporativos on-premise/cloud sob demanda de governança, o stack precisa ser unificado, com facilidade de deploy via container e suporte a transações ACID rigorosas.
+Para ambientes corporativos on-premise e cloud sob demanda de governança e alta rastreabilidade, o stack técnico precisa ser unificado, com facilidade de deploy via container conteinerizado e suporte nativo a transações ACID rigorosas.
 
 ## Decisão
 1. Adotar **ASP.NET Core (.NET 9 / 10)** como o runtime e framework de aplicação para a API MCP e a interface web de revisão.

@@ -5,8 +5,8 @@
 | Versão | 0.1, proposta para revisão |
 | Objetivo | Especificar o primeiro piloto e orientar a implementação |
 | Usuário inicial | Equipe de engenharia que usa agentes de IA para desenvolvimento, revisão e análise de incidentes |
-| Arquitetura proposta | ASP.NET Core sobre .NET 9/10 LTS, SDK oficial MCP, PostgreSQL 18 e provedor OAuth compatível com MCP |
-| Referência de engenharia | `YudiG12/second-brain-mcp`, commit `d941e74f24179f7599fa568f437028e2e047db5b` |
+| Arquitetura proposta | ASP.NET Core sobre .NET 9 LTS, SDK oficial MCP, PostgreSQL 16+ e provedor OAuth compatível com MCP |
+| Padrões arquiteturais | Event Sourcing, CQRS, Row-Level Security (RLS), Streamable HTTP e Organic macOS UI |
 
 ## 1. Problema e resultado esperado
 
@@ -18,16 +18,16 @@ O Sentinel disponibiliza, via MCP, decisões aprovadas e incidentes reportados. 
 
 **Limites do MVP.** Um provedor de identidade, dois clientes MCP de referência, isolamento por workspace, projetos dentro de um workspace, busca textual e uma página de aprovação. O piloto usa dados fictícios ou exemplos públicos autorizados. Busca vetorial, ingestão automática de GitHub ou Azure DevOps, acesso de agentes em background sem usuário, integração com outros hosts, consolidação automática e deploy na borda pertencem a fases posteriores.
 
-## 2. O que aproveitar do Second Brain MCP
+## 2. Princípios de Engenharia do Sentinel
 
-| Prática observada | Aplicação no Sentinel |
+| Princípio de Projeto | Aplicação no Sentinel |
 | --- | --- |
-| Cloudflare Artifacts guarda as notas em Git. O índice é derivado. | PostgreSQL guarda os eventos e o conteúdo referenciado. A visão atual e a busca são reconstruíveis a partir desse histórico. |
-| Um Durable Object por repositório serializa escritas. O writer verifica versões e trata tentativas após respostas incertas. | A transação serializa alterações do mesmo tópico no banco. Versão esperada evita sobrescrita e chave de idempotência resolve repetição após timeout. Tópicos distintos podem avançar em paralelo. |
-| O consumidor da fila indexa. Um manifesto registra o que foi indexado, e um Workflow reconcilia divergências. | A projeção textual entra na transação do MVP. Se a busca semântica entrar, o worker será dono da projeção vetorial, com versão por documento, reprocessamento e verificação de divergências. |
-| Uma tool reúne busca lexical e semântica. O cliente conhece o contrato e a origem da correspondência. | `query_context` mantém uma interface única. O ranking pode evoluir sem mudar a maneira como o agente consulta decisões. |
-| ADRs registram as falhas que motivaram mudanças. CI testa concorrência e reparo. `AGENTS.md` documenta execução e provisionamento repetíveis. | Cada ADR declara a propriedade esperada e como verificá-la. CI roda os testes contra PostgreSQL real e valida a instalação em ambiente limpo. |
-| A implantação da referência permite o acesso de um proprietário via login GitHub. | O Sentinel precisa validar, em cada operação, a identidade, o escopo do cliente e o vínculo da pessoa com o workspace. |
+| Armazenamento Imutável | PostgreSQL guarda os eventos e o conteúdo referenciado. A visão atual e a busca são reconstruíveis deterministicamente a partir desse histórico. |
+| Serialização e Concorrência | A transação serializa alterações do mesmo tópico no banco. Versão esperada evita sobrescrita e chave de idempotência resolve repetição após timeout. Tópicos distintos avançam em paralelo. |
+| Projeções e Reconciliação | A projeção textual entra na transação atômica. Se a busca semântica entrar, um worker dedicado reconcilia divergências e versionamento por documento. |
+| Interface Única de Consulta | `query_context` mantém uma interface única e previsível. O ranking de busca textual e identificadores exatos pode evoluir sem quebrar contratos de clientes. |
+| Rastreabilidade e Repetibilidade | Cada ADR declara a propriedade esperada e como verificá-la. CI roda os testes contra banco real e `AGENTS.md` padroniza execução repetível. |
+| Governança com Separação de Acesso | O Sentinel valida, em cada operação, a identidade, o escopo do cliente e o vínculo da pessoa com o workspace, impedindo aprovações automáticas por agentes. |
 
 ## 3. Arquitetura do MVP
 
