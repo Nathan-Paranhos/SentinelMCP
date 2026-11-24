@@ -554,7 +554,7 @@ Implementados em `tests/Sentinel.IntegrationTests/CriteriosDeAceite.cs`. O resul
 ### Página de revisão (`/review`) e Landing (`/`)
 
 O console web em `/review` (`src/Sentinel.Api/WebReview/review.html` + `wwwroot/js/`) começa sem dados fictícios pelo onboarding `/auth/setup` e oferece governança humana completa:
-- **Navegação Clara e Controles de Fechamento**: barra lateral colapsável e retrátil (`Menu` / `×`), Inspetor em gaveta responsiva com botão `× Fechar`, barra `← Voltar` / `Visão Geral` nos detalhes e visão inicial explicativa do fluxo em 4 etapas.
+- **Navegação Clara e Controles Retráteis**: barra lateral recolhível/expansível por setas (`«` / `» Menu`), Inspetor em gaveta responsiva com botão `× Fechar`, barra `← Voltar` / `Visão Geral` nos detalhes e visão inicial explicativa do fluxo em 4 etapas.
 - **Fila de Revisão com Diff Lado a Lado**: comparação direta entre a **Decisão Vigente** e a **Proposta Pendente** (título, resumo, justificativa, chaves técnicas e evidências HTTPS).
 - **Catálogo de Decisões, Histórico e Restauração**: filtros por projeto e busca instantânea, histórico de versões (`GET /api/review/timeline`) e botão de restauração (`POST /api/review/restore`) para propor reversão segura.
 - **Incidentes e Eventos Append-Only**: filtro por tipo de evento e inspeção cronológica.

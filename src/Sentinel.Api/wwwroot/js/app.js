@@ -287,6 +287,10 @@ function updateSidebarState(collapsed) {
     if (btn) {
         btn.classList.toggle('active', !collapsed);
         btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+        const acaoRotulo = collapsed ? 'Expandir menu lateral' : 'Recolher menu lateral';
+        btn.setAttribute('title', acaoRotulo);
+        btn.setAttribute('aria-label', acaoRotulo);
+        btn.innerHTML = `${collapsed ? Icons.chevronsRight : Icons.chevronsLeft}<span>Menu</span>`;
     }
     atualizarBackdropDrawers();
 }
