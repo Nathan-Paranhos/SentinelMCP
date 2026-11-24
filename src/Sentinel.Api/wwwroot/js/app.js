@@ -156,11 +156,13 @@ function renderOverviewView(container) {
     const propostas = appStore.get('propostas');
     const decisoes = appStore.get('decisoes');
     const incidentes = appStore.get('incidentes');
+    const ws = appStore.get('workspace');
+    const wsNome = ws ? (ws.nome || ws.slug) : 'Workspace Principal';
 
     container.innerHTML = `
         <div class="overview-view">
             <div class="overview-hero">
-                <div class="overview-badge">Espaço: Pagamentos e Cobrança</div>
+                <div class="overview-badge">Espaço: ${escapeHtml(wsNome)}</div>
                 <h1 class="overview-title">Governança Arquitetural Ativa</h1>
                 <p class="overview-desc">Consolidação contínua de decisões de arquitetura e relatos de incidentes com proveniência imutável e controle de concorrência.</p>
             </div>
@@ -193,7 +195,11 @@ function renderOverviewView(container) {
                     <div class="overview-section-title">Decisões Vigentes Ativas (${decisoes.length})</div>
                     <button class="btn-macos btn-macos-secondary" onclick="window.__sentinelAppStore.set('activeView', 'decisions')">Ver Todas</button>
                 </div>
-                ${decisoes.map(d => `
+                ${decisoes.length === 0 ? `
+                    <div style="padding: 1.5rem; text-align: center; color: var(--text-tertiary); font-size: 0.88rem;">
+                        Nenhuma decisão vigente consolidada no momento.
+                    </div>
+                ` : decisoes.map(d => `
                     <div class="overview-list-row" onclick="window.__sentinelSelectDecision('${d.topicoId}')">
                         <div class="overview-row-left">
                             <span class="overview-row-title">${escapeHtml(d.titulo)}</span>
@@ -483,25 +489,39 @@ function renderTimelineView(container) {
     container.innerHTML = `
         <div class="overview-view">
             <div class="overview-hero">
+                <div class="overview-badge">Trilha Auditável Event Sourced</div>
                 <h1 class="overview-title">Histórico de Eventos Imutáveis</h1>
-                <p class="overview-desc">Trilha cronológica auditável de eventos append-only gerados por agentes e revisores humanos.</p>
+                <p class="overview-desc">Registro permanente e append-only de todas as transações, propostas e validações ocorridas neste espaço de trabalho.</p>
             </div>
-            <div style="display:flex;flex-direction:column;gap:8px;">
+            <div class="overview-section">
+                <div class="overview-section-title">Eventos Recentes (${eventos.length})</div>
                 ${eventos.length === 0 ? `
-                    <div style="padding: 2rem; text-align: center; color: var(--text-tertiary); font-size: 0.88rem;">
-                        Nenhum evento registrado no histórico do workspace.
+                    <div style="padding: 2.5rem; text-align: center; color: var(--text-tertiary); font-size: 0.88rem;">
+                        Nenhum evento registrado no histórico do workspace no momento.
                     </div>
-                ` : eventos.map(ev => `
-                    <div class="overview-list-row">
-                        <div class="overview-row-left">
-                            <span class="overview-row-title">${escapeHtml(ev.tipo)} (v${ev.versaoFluxo})</span>
-                            <span class="overview-row-sub">Autor: ${escapeHtml(ev.autorSujeito)} (${escapeHtml(ev.clienteId || 'sessão web')})</span>
+                ` : eventos.map(ev => {
+                    const isApproval = ev.tipo.includes('Approved') || ev.tipo.includes('Aprovada');
+                    const isRejection = ev.tipo.includes('Rejected') || ev.tipo.includes('Rejeitada');
+                    const isIncident = ev.tipo.includes('Incident') || ev.tipo.includes('Incidente');
+                    const pillClass = isApproval ? 'active-state' : isRejection ? 'status-pill' : isIncident ? 'reported-state' : 'proposed-state';
+                    const pillText = isApproval ? 'Aprovado' : isRejection ? 'Rejeitado' : isIncident ? 'Incidente' : 'Proposta';
+
+                    return `
+                        <div class="overview-list-row" style="cursor:default;">
+                            <div class="overview-row-left">
+                                <div style="display:flex;align-items:center;gap:8px;margin-bottom:3px;">
+                                    <span class="status-pill ${pillClass}">${pillText}</span>
+                                    <span class="overview-row-title">${escapeHtml(ev.tipo)}</span>
+                                    <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-tertiary);">v${ev.versaoFluxo}</span>
+                                </div>
+                                <span class="overview-row-sub">Autor: ${escapeHtml(ev.autorSujeito)} • Cliente: ${escapeHtml(ev.clienteId || 'sessão web')}</span>
+                            </div>
+                            <div class="overview-row-right">
+                                <span style="font-family:var(--font-mono);font-size:0.74rem;color:var(--text-tertiary);">${ev.registradoEm || ev.gravadoEm ? new Date(ev.registradoEm || ev.gravadoEm).toLocaleString('pt-BR') : ''}</span>
+                            </div>
                         </div>
-                        <div class="overview-row-right">
-                            <span style="font-family:var(--font-mono);font-size:0.72rem;color:var(--text-tertiary);">${new Date(ev.gravadoEm).toLocaleString('pt-BR')}</span>
-                        </div>
-                    </div>
-                `).join('')}
+                    `;
+                }).join('')}
             </div>
         </div>
     `;

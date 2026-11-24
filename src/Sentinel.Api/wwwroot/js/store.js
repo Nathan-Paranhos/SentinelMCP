@@ -45,6 +45,7 @@ class Store {
         if (payload.decisoes) this.state.decisoes = payload.decisoes;
         if (payload.incidentes) this.state.incidentes = payload.incidentes;
         if (payload.eventos) this.state.eventos = payload.eventos;
+        if (payload.workspaces) this.state.workspaces = payload.workspaces;
         if (payload.workspace) this.state.workspace = payload.workspace;
 
         if (this.state.propostas.length > 0) {

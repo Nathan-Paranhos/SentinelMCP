@@ -20,6 +20,7 @@ public interface IRepositorioDecisao
     Task<DecisaoAtual?> ObterDecisaoAtualAsync(Guid espacoTrabalhoId, Guid projetoId, Guid topicoId, CancellationToken ct = default);
     Task<List<DecisaoAtual>> ObterPropostasPendentesAsync(Guid espacoTrabalhoId, Guid? projetoId = null, CancellationToken ct = default);
     Task<List<DecisaoAtual>> ObterDecisoesVigentesAsync(Guid espacoTrabalhoId, Guid? projetoId = null, CancellationToken ct = default);
+    Task<List<EventoMemoria>> ObterEventosRecentesAsync(Guid espacoTrabalhoId, int limite = 50, CancellationToken ct = default);
     Task<List<EventoMemoria>> ObterEventosPorFluxoAsync(Guid espacoTrabalhoId, Guid fluxoId, int? naVersao = null, int? antesDaVersao = null, int limite = 50, CancellationToken ct = default);
     Task<CargaMemoria?> ObterCargaAsync(Guid espacoTrabalhoId, Guid cargaId, CancellationToken ct = default);
     Task<ResultadoProporDecisao> ProporDecisaoAsync(ComandoProporDecisao comando, CancellationToken ct = default);

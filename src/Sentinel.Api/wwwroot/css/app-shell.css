@@ -184,6 +184,24 @@
     background-color: var(--status-success);
 }
 
+.workspace-select-dropdown {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    padding: 0;
+    margin: 0;
+}
+
+.workspace-select-dropdown option {
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
+}
+
 .macos-main {
     flex: 1;
     height: 100%;

@@ -342,6 +342,42 @@ public sealed class RepositorioSentinelPostgreSql :
         return eventos;
     }
 
+    public async Task<List<EventoMemoria>> ObterEventosRecentesAsync(Guid espacoTrabalhoId, int limite = 50, CancellationToken ct = default)
+    {
+        await using var conexao = await AbrirConexaoComRlsAsync(espacoTrabalhoId, ct);
+        var sql = @"SELECT event_id, workspace_id, project_id, stream_id, stream_version, type,
+                           schema_version, recorded_at, author_subject, author_issuer, client_id,
+                           payload_id, ref_event_id
+                    FROM memory_events
+                    WHERE workspace_id = @ws
+                    ORDER BY recorded_at DESC LIMIT @lim";
+        await using var cmd = new NpgsqlCommand(sql, conexao);
+        cmd.Parameters.AddWithValue("ws", espacoTrabalhoId);
+        cmd.Parameters.AddWithValue("lim", limite);
+
+        var eventos = new List<EventoMemoria>();
+        await using var leitor = await cmd.ExecuteReaderAsync(ct);
+        while (await leitor.ReadAsync(ct))
+        {
+            eventos.Add(new EventoMemoria(
+                leitor.GetGuid(0),
+                leitor.GetGuid(1),
+                leitor.GetGuid(2),
+                leitor.GetGuid(3),
+                leitor.GetInt32(4),
+                leitor.GetString(5),
+                leitor.GetInt32(6),
+                leitor.GetFieldValue<DateTimeOffset>(7),
+                leitor.GetString(8),
+                leitor.GetString(9),
+                leitor.IsDBNull(10) ? null : leitor.GetString(10),
+                leitor.IsDBNull(11) ? null : leitor.GetGuid(11),
+                leitor.IsDBNull(12) ? null : leitor.GetGuid(12)
+            ));
+        }
+        return eventos;
+    }
+
     public async Task<CargaMemoria?> ObterCargaAsync(Guid espacoTrabalhoId, Guid cargaId, CancellationToken ct = default)
     {
         await using var conexao = await AbrirConexaoComRlsAsync(espacoTrabalhoId, ct);

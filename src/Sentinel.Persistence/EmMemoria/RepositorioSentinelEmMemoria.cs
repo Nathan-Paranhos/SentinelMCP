@@ -282,6 +282,19 @@ public sealed class RepositorioSentinelEmMemoria :
         }
     }
 
+    public Task<List<EventoMemoria>> ObterEventosRecentesAsync(Guid espacoTrabalhoId, int limite = 50, CancellationToken ct = default)
+    {
+        lock (_travaGlobal)
+        {
+            var eventos = _eventosMemoria
+                .Where(e => e.EspacoTrabalhoId == espacoTrabalhoId)
+                .OrderByDescending(e => e.RegistradoEm)
+                .Take(limite)
+                .ToList();
+            return Task.FromResult(eventos);
+        }
+    }
+
     public Task<CargaMemoria?> ObterCargaAsync(Guid espacoTrabalhoId, Guid cargaId, CancellationToken ct = default)
     {
         if (_cargasMemoria.TryGetValue(cargaId, out var c) && c.EspacoTrabalhoId == espacoTrabalhoId)

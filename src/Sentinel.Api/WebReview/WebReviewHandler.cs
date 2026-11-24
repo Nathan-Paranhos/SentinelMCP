@@ -529,6 +529,9 @@ public sealed class WebReviewHandler
         var incidentes = espacoAtivo != null 
             ? await _repositorioIncidente.ObterIncidentesAsync(espacoId, ct: contexto.RequestAborted) 
             : new List<IncidenteAtual>();
+        var eventos = espacoAtivo != null
+            ? await _repositorioDecisao.ObterEventosRecentesAsync(espacoId, 50, ct: contexto.RequestAborted)
+            : new List<EventoMemoria>();
 
         var opcoesJson = new JsonSerializerOptions
         {
@@ -536,11 +539,18 @@ public sealed class WebReviewHandler
             WriteIndented = false
         };
 
+        var seletorWorkspaceHtml = todosEspacos.Count > 1
+            ? @"<select class=""workspace-select-dropdown"" onchange=""if(this.value) window.location.href='/review?workspaceId=' + this.value;"" title=""Alternar Espaço de Trabalho"">"
+              + string.Join("", todosEspacos.Select(e => $@"<option value=""{e.EspacoTrabalhoId}"" {(e.EspacoTrabalhoId == espacoId ? "selected" : "")}>{e.Nome}</option>"))
+              + "</select>"
+            : $@"<span style=""font-weight:600;"">{espacoAtivo?.Nome ?? "Workspace Principal"}</span>";
+
         var pacoteDados = new
         {
             propostas = propostas,
             decisoes = decisoesVigentes,
             incidentes = incidentes,
+            eventos = eventos,
             workspaces = todosEspacos.Select(e => new { id = e.EspacoTrabalhoId.ToString(), nome = e.Nome, slug = e.IdentificadorSlug }),
             workspace = new
             {
@@ -642,7 +652,7 @@ public sealed class WebReviewHandler
                     <div class=""workspace-pill"">
                         <div class=""workspace-pill-left"">
                             <span class=""workspace-dot""></span>
-                            <span style=""font-weight:600;"">Pagamentos</span>
+                            {seletorWorkspaceHtml}
                         </div>
                         <span style=""font-family:var(--font-mono);font-size:0.68rem;color:var(--status-success);"">RLS</span>
                     </div>
