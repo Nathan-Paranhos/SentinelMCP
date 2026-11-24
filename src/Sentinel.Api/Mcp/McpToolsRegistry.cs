@@ -104,7 +104,7 @@ public static class McpToolsRegistry
         new McpToolDefinition
         {
             Name = "get_timeline",
-            Description = "Retrieves the event history and reconstituted state for a decision topic or incident stream at any version. Requires read:memory scope.",
+            Description = "Returns the event stream and reconstituted state of a decision topic or incident. Requires read:memory scope.",
             InputSchema = new
             {
                 type = "object",
@@ -112,11 +112,11 @@ public static class McpToolsRegistry
                 {
                     workspaceId = new { type = "string", format = "uuid", description = "Workspace ID" },
                     projectId = new { type = "string", format = "uuid", description = "Project ID" },
-                    kind = new { type = "string", @enum = new[] { "decision", "incident" }, description = "Kind of stream" },
-                    streamId = new { type = "string", format = "uuid", description = "Stream or Topic ID" },
-                    atVersion = new { type = "integer", minimum = 1, description = "Optional version to reconstitute past state" },
-                    beforeVersion = new { type = "integer", minimum = 1, description = "Paging: get events before this stream version" },
-                    limit = new { type = "integer", minimum = 1, maximum = 50, @default = 20, description = "Max events to retrieve" }
+                    kind = new { type = "string", @enum = new[] { "decision", "incident" }, description = "Stream kind" },
+                    streamId = new { type = "string", format = "uuid", description = "Topic ID or Incident ID" },
+                    atVersion = new { type = "integer", minimum = 1, description = "Reconstitute state at specific stream version" },
+                    beforeVersion = new { type = "integer", minimum = 1, description = "Filter events before stream version (pagination)" },
+                    limit = new { type = "integer", minimum = 1, maximum = 50, @default = 20, description = "Number of events to retrieve" }
                 },
                 required = new[] { "workspaceId", "projectId", "kind", "streamId" }
             }
@@ -124,7 +124,7 @@ public static class McpToolsRegistry
         new McpToolDefinition
         {
             Name = "get_context_receipt",
-            Description = "Retrieves an immutable context query receipt showing the exact record versions prepared by the server. Requires read:memory scope.",
+            Description = "Retrieves an immutable context query receipt containing the exact versions returned. Requires read:memory scope.",
             InputSchema = new
             {
                 type = "object",

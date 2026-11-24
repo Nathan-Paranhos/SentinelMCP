@@ -4,71 +4,70 @@ namespace Sentinel.Api.Mcp;
 
 public sealed class McpEndpointHandler
 {
-    private readonly McpDispatcher _dispatcher;
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private readonly McpDispatcher _despachante;
+    private static readonly JsonSerializerOptions OpcoesJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = false
     };
 
-    public McpEndpointHandler(McpDispatcher dispatcher)
+    public McpEndpointHandler(McpDispatcher despachante)
     {
-        _dispatcher = dispatcher;
+        _despachante = despachante;
     }
 
-    public async Task HandleAsync(HttpContext context)
+    public async Task HandleAsync(HttpContext contexto)
     {
-        if (HttpMethods.IsGet(context.Request.Method))
+        if (HttpMethods.IsGet(contexto.Request.Method))
         {
-            // Streamable HTTP / SSE handshake endpoint
-            context.Response.ContentType = "text/event-stream";
-            context.Response.Headers.CacheControl = "no-cache";
-            context.Response.Headers.Connection = "keep-alive";
+            contexto.Response.ContentType = "text/event-stream";
+            contexto.Response.Headers.CacheControl = "no-cache";
+            contexto.Response.Headers.Connection = "keep-alive";
 
-            var endpointMessage = "event: endpoint\ndata: /mcp\n\n";
-            await context.Response.WriteAsync(endpointMessage);
-            await context.Response.Body.FlushAsync();
+            var mensagemEndpoint = "event: endpoint\ndata: /mcp\n\n";
+            await contexto.Response.WriteAsync(mensagemEndpoint);
+            await contexto.Response.Body.FlushAsync();
             return;
         }
 
-        if (!HttpMethods.IsPost(context.Request.Method))
+        if (!HttpMethods.IsPost(contexto.Request.Method))
         {
-            context.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
+            contexto.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
             return;
         }
 
-        JsonRpcRequest? request;
+        JsonRpcRequest? requisicao;
         try
         {
-            request = await JsonSerializer.DeserializeAsync<JsonRpcRequest>(context.Request.Body, JsonOptions);
+            requisicao = await JsonSerializer.DeserializeAsync<JsonRpcRequest>(contexto.Request.Body, OpcoesJson);
         }
         catch (JsonException ex)
         {
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsJsonAsync(JsonRpcResponse.CreateError(null, -32700, "Parse error", ex.Message));
+            contexto.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await contexto.Response.WriteAsJsonAsync(JsonRpcResponse.CreateError(null, -32700, "Erro ao analisar JSON", ex.Message));
             return;
         }
 
-        if (request == null || string.IsNullOrWhiteSpace(request.Method))
+        if (requisicao == null || string.IsNullOrWhiteSpace(requisicao.Method))
         {
-            context.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await context.Response.WriteAsJsonAsync(JsonRpcResponse.CreateError(null, -32600, "Invalid Request"));
+            contexto.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await contexto.Response.WriteAsJsonAsync(JsonRpcResponse.CreateError(null, -32600, "Requisição inválida"));
             return;
         }
 
-        switch (request.Method)
+        switch (requisicao.Method)
         {
             case "initialize":
             {
-                var protocolVersion = "2024-11-05";
-                if (request.Params.HasValue && request.Params.Value.TryGetProperty("protocolVersion", out var pvElem))
+                var versaoProtocolo = "2024-11-05";
+                if (requisicao.Params.HasValue && requisicao.Params.Value.TryGetProperty("protocolVersion", out var pvElem))
                 {
-                    protocolVersion = pvElem.GetString() ?? "2024-11-05";
+                    versaoProtocolo = pvElem.GetString() ?? "2024-11-05";
                 }
 
-                var initResult = new
+                var resultadoInicializacao = new
                 {
-                    protocolVersion,
+                    protocolVersion = versaoProtocolo,
                     capabilities = new
                     {
                         tools = new { listChanged = false }
@@ -80,62 +79,61 @@ public sealed class McpEndpointHandler
                     }
                 };
 
-                await context.Response.WriteAsJsonAsync(JsonRpcResponse.Success(request.Id, initResult), JsonOptions);
+                await contexto.Response.WriteAsJsonAsync(JsonRpcResponse.Success(requisicao.Id, resultadoInicializacao), OpcoesJson);
                 break;
             }
 
             case "notifications/initialized":
             {
-                // Notifications do not return a response
-                context.Response.StatusCode = StatusCodes.Status202Accepted;
+                contexto.Response.StatusCode = StatusCodes.Status202Accepted;
                 break;
             }
 
             case "ping":
             {
-                await context.Response.WriteAsJsonAsync(JsonRpcResponse.Success(request.Id, new { }), JsonOptions);
+                await contexto.Response.WriteAsJsonAsync(JsonRpcResponse.Success(requisicao.Id, new { }), OpcoesJson);
                 break;
             }
 
             case "tools/list":
             {
-                var listResult = new
+                var resultadoLista = new
                 {
                     tools = McpToolsRegistry.AllTools
                 };
-                await context.Response.WriteAsJsonAsync(JsonRpcResponse.Success(request.Id, listResult), JsonOptions);
+                await contexto.Response.WriteAsJsonAsync(JsonRpcResponse.Success(requisicao.Id, resultadoLista), OpcoesJson);
                 break;
             }
 
             case "tools/call":
             {
-                if (!request.Params.HasValue)
+                if (!requisicao.Params.HasValue)
                 {
-                    await context.Response.WriteAsJsonAsync(
-                        JsonRpcResponse.CreateError(request.Id, -32602, "Invalid params: expected tool name and arguments"), JsonOptions);
+                    await contexto.Response.WriteAsJsonAsync(
+                        JsonRpcResponse.CreateError(requisicao.Id, -32602, "Parâmetros inválidos: esperado nome da ferramenta e argumentos"), OpcoesJson);
                     return;
                 }
 
-                var paramsObj = request.Params.Value;
-                if (!paramsObj.TryGetProperty("name", out var nameElem))
+                var parametros = requisicao.Params.Value;
+                if (!parametros.TryGetProperty("name", out var nomeElem))
                 {
-                    await context.Response.WriteAsJsonAsync(
-                        JsonRpcResponse.CreateError(request.Id, -32602, "Missing tool 'name'"), JsonOptions);
+                    await contexto.Response.WriteAsJsonAsync(
+                        JsonRpcResponse.CreateError(requisicao.Id, -32602, "Propriedade 'name' obrigatória ausente"), OpcoesJson);
                     return;
                 }
 
-                var toolName = nameElem.GetString() ?? string.Empty;
-                var arguments = paramsObj.TryGetProperty("arguments", out var argsElem) ? argsElem : default;
+                var nomeFerramenta = nomeElem.GetString() ?? string.Empty;
+                var argumentos = parametros.TryGetProperty("arguments", out var argsElem) ? argsElem : default;
 
-                var toolResult = await _dispatcher.CallToolAsync(toolName, arguments, context, context.RequestAborted);
-                await context.Response.WriteAsJsonAsync(JsonRpcResponse.Success(request.Id, toolResult), JsonOptions);
+                var resultadoFerramenta = await _despachante.CallToolAsync(nomeFerramenta, argumentos, contexto, contexto.RequestAborted);
+                await contexto.Response.WriteAsJsonAsync(JsonRpcResponse.Success(requisicao.Id, resultadoFerramenta), OpcoesJson);
                 break;
             }
 
             default:
             {
-                await context.Response.WriteAsJsonAsync(
-                    JsonRpcResponse.CreateError(request.Id, -32601, $"Method not found: {request.Method}"), JsonOptions);
+                await contexto.Response.WriteAsJsonAsync(
+                    JsonRpcResponse.CreateError(requisicao.Id, -32601, $"Método não encontrado: {requisicao.Method}"), OpcoesJson);
                 break;
             }
         }

@@ -1,149 +1,161 @@
-using Sentinel.Core.Exceptions;
-using Sentinel.Core.Models;
-using Sentinel.Persistence.Contracts;
+using Sentinel.Core.Excecoes;
+using Sentinel.Core.Modelos;
+using Sentinel.Persistence.Contratos;
 
 namespace Sentinel.Api.Auth;
 
-public sealed record ResolvedIdentity(
-    string Issuer,
-    string Subject,
-    string? ClientId,
-    List<string> Scopes,
-    UserRole? DeclaredRole
+public sealed record IdentidadeResolvida(
+    string Emissor,
+    string Sujeito,
+    string? ClienteId,
+    List<string> Escopos,
+    PapelUsuario? PapelDeclarado
 );
 
-public interface IIdentityService
+public interface IServicoIdentidade
 {
-    Task<Membership> AuthenticateAndAuthorizeAsync(
-        HttpContext httpContext,
-        Guid workspaceId,
-        string requiredScope,
-        UserRole minRequiredRole,
+    Task<VinculoMembro> AutenticarEAutorizarAsync(
+        HttpContext contextoHttp,
+        Guid espacoTrabalhoId,
+        string escopoNecessario,
+        PapelUsuario papelMinimoObrigatorio,
         CancellationToken ct = default);
 
-    ResolvedIdentity ResolveIdentity(HttpContext httpContext);
+    IdentidadeResolvida ResolverIdentidade(HttpContext contextoHttp);
 }
 
-public sealed class IdentityService : IIdentityService
+public sealed class ServicoIdentidade : IServicoIdentidade
 {
-    private readonly IWorkspaceRepository _workspaceRepo;
+    private readonly IRepositorioEspacoTrabalho _repositorioEspacoTrabalho;
 
-    public IdentityService(IWorkspaceRepository workspaceRepo)
+    public ServicoIdentidade(IRepositorioEspacoTrabalho repositorioEspacoTrabalho)
     {
-        _workspaceRepo = workspaceRepo;
+        _repositorioEspacoTrabalho = repositorioEspacoTrabalho;
     }
 
-    public ResolvedIdentity ResolveIdentity(HttpContext httpContext)
+    public IdentidadeResolvida ResolverIdentidade(HttpContext contextoHttp)
     {
-        var authHeader = httpContext.Request.Headers.Authorization.ToString();
-        if (string.IsNullOrWhiteSpace(authHeader) || !authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        var cabecalhoAutorizacao = contextoHttp.Request.Headers.Authorization.ToString();
+        if (string.IsNullOrWhiteSpace(cabecalhoAutorizacao) || !cabecalhoAutorizacao.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
-            throw new UnauthorizedDomainException("Missing or invalid Authorization header. Expected Bearer token.");
+            throw new ExcecaoDeNaoAutorizado("Cabeçalho de autorização ausente ou inválido. Esperado token Bearer.");
         }
 
-        var token = authHeader["Bearer ".Length..].Trim();
+        var token = cabecalhoAutorizacao["Bearer ".Length..].Trim();
 
-        // Support test/mock token format:
-        // 1) mock:<subject>:<role>:<scopes_comma_separated>:<client_id>
-        // 2) mock:https://auth.sentinel.dev:<subject>:<role>:<scopes>:<client_id>
         if (token.StartsWith("mock:", StringComparison.OrdinalIgnoreCase))
         {
-            var raw = token["mock:".Length..].Trim();
-            string issuer = "https://auth.sentinel.dev";
-            string subject = "agent-dev-1";
-            string roleStr = "Contributor";
-            string scopesStr = "read:memory,write:decision,write:incident";
+            var dadosBrutos = token["mock:".Length..].Trim();
+            string emissor = "https://auth.sentinel.dev";
+            string sujeito = "agent-dev-1";
+            string papelTexto = "Contributor";
+            string escoposTexto = "read:memory,write:decision,write:incident";
             string clientId = "claude-code";
 
-            if (raw.Contains('|'))
+            if (dadosBrutos.Contains('|'))
             {
-                var parts = raw.Split('|');
-                if (parts.Length > 0 && !string.IsNullOrEmpty(parts[0])) subject = parts[0];
-                if (parts.Length > 1 && !string.IsNullOrEmpty(parts[1])) roleStr = parts[1];
-                if (parts.Length > 2 && !string.IsNullOrEmpty(parts[2])) scopesStr = parts[2];
-                if (parts.Length > 3 && !string.IsNullOrEmpty(parts[3])) clientId = parts[3];
-                if (parts.Length > 4 && !string.IsNullOrEmpty(parts[4])) issuer = parts[4];
+                var partes = dadosBrutos.Split('|');
+                if (partes.Length > 0 && !string.IsNullOrEmpty(partes[0])) sujeito = partes[0];
+                if (partes.Length > 1 && !string.IsNullOrEmpty(partes[1])) papelTexto = partes[1];
+                if (partes.Length > 2 && !string.IsNullOrEmpty(partes[2])) escoposTexto = partes[2];
+                if (partes.Length > 3 && !string.IsNullOrEmpty(partes[3])) clientId = partes[3];
+                if (partes.Length > 4 && !string.IsNullOrEmpty(partes[4])) emissor = partes[4];
             }
             else
             {
-                var schemeEnd = raw.IndexOf("://", StringComparison.OrdinalIgnoreCase);
-                if (schemeEnd >= 0)
+                var fimEsquema = dadosBrutos.IndexOf("://", StringComparison.OrdinalIgnoreCase);
+                if (fimEsquema >= 0)
                 {
-                    var nextColon = raw.IndexOf(':', schemeEnd + 3);
-                    if (nextColon >= 0)
+                    var proximoDoisPontos = dadosBrutos.IndexOf(':', fimEsquema + 3);
+                    if (proximoDoisPontos >= 0)
                     {
-                        issuer = raw[..nextColon];
-                        raw = raw[(nextColon + 1)..];
+                        emissor = dadosBrutos[..proximoDoisPontos];
+                        dadosBrutos = dadosBrutos[(proximoDoisPontos + 1)..];
                     }
                 }
 
-                var parts = raw.Split(':');
-                if (parts.Length == 1 && !string.IsNullOrEmpty(parts[0]))
+                var partes = dadosBrutos.Split(':');
+                if (partes.Length >= 4)
                 {
-                    subject = parts[0];
+                    sujeito = partes[0];
+                    papelTexto = partes[1];
+                    clientId = partes[^1];
+                    escoposTexto = string.Join(':', partes.Skip(2).Take(partes.Length - 3));
                 }
-                else if (parts.Length >= 2)
+                else
                 {
-                    subject = parts[0];
-                    roleStr = parts[1];
-                    var remainder = string.Join(':', parts.Skip(2));
-                    var lastColon = remainder.LastIndexOf(':');
-                    if (lastColon >= 0 && (remainder.Contains("read:") || remainder.Contains("write:")))
-                    {
-                        scopesStr = remainder[..lastColon];
-                        clientId = remainder[(lastColon + 1)..];
-                    }
-                    else
-                    {
-                        scopesStr = remainder;
-                    }
+                    if (partes.Length > 0 && !string.IsNullOrEmpty(partes[0])) sujeito = partes[0];
+                    if (partes.Length > 1 && !string.IsNullOrEmpty(partes[1])) papelTexto = partes[1];
+                    if (partes.Length > 2 && !string.IsNullOrEmpty(partes[2])) escoposTexto = partes[2];
                 }
             }
 
-            Enum.TryParse<UserRole>(roleStr, true, out var role);
-            var scopes = scopesStr.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            var escopos = escoposTexto.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
+            Enum.TryParse<PapelUsuario>(papelTexto, true, out var papel);
 
-            return new ResolvedIdentity(issuer, subject, clientId, scopes, role);
+            return new IdentidadeResolvida(emissor, sujeito, clientId, escopos, papel);
         }
 
-        // For demo/dev default: fallback to agent-dev-1 with all scopes if simple token passed
-        return new ResolvedIdentity(
-            Issuer: "https://auth.sentinel.dev",
-            Subject: token,
-            ClientId: "claude-code",
-            Scopes: ["read:memory", "write:decision", "write:incident"],
-            DeclaredRole: UserRole.Contributor
-        );
+        var tokensJwtFicticios = new Dictionary<string, (string Sujeito, string Emissor, string? ClienteId, List<string> Escopos, PapelUsuario Papel)>
+        {
+            ["agent-token"] = ("agent-dev-1", "https://auth.sentinel.dev", "claude-code", ["read:memory", "write:decision", "write:incident"], PapelUsuario.Contributor),
+            ["maintainer-token"] = ("maintainer-alice", "https://auth.sentinel.dev", null, ["read:memory", "write:decision", "write:incident", "admin:all"], PapelUsuario.Maintainer),
+            ["reader-token"] = ("reader-bob", "https://auth.sentinel.dev", "cursor-ide", ["read:memory"], PapelUsuario.Reader)
+        };
+
+        if (tokensJwtFicticios.TryGetValue(token, out var info))
+        {
+            return new IdentidadeResolvida(info.Emissor, info.Sujeito, info.ClienteId, info.Escopos, info.Papel);
+        }
+
+        throw new ExcecaoDeNaoAutorizado($"Token Bearer inválido ou não reconhecido: '{token}'.");
     }
 
-    public async Task<Membership> AuthenticateAndAuthorizeAsync(
-        HttpContext httpContext,
-        Guid workspaceId,
-        string requiredScope,
-        UserRole minRequiredRole,
+    public async Task<VinculoMembro> AutenticarEAutorizarAsync(
+        HttpContext contextoHttp,
+        Guid espacoTrabalhoId,
+        string escopoNecessario,
+        PapelUsuario papelMinimoObrigatorio,
         CancellationToken ct = default)
     {
-        var identity = ResolveIdentity(httpContext);
+        var identidade = ResolverIdentidade(contextoHttp);
 
-        // 1. Validate Scope
-        if (!identity.Scopes.Contains(requiredScope, StringComparer.OrdinalIgnoreCase))
+        if (!identidade.Escopos.Contains(escopoNecessario) && !identidade.Escopos.Contains("admin:all"))
         {
-            throw new UnauthorizedDomainException($"Token lacks required scope '{requiredScope}'. Available: {string.Join(", ", identity.Scopes)}");
+            throw new ExcecaoDeNaoAutorizado($"Escopo insuficiente. Necessário: '{escopoNecessario}'. Escopos presentes: '{string.Join(", ", identidade.Escopos)}'.");
         }
 
-        // 2. Validate Membership in workspace
-        var membership = await _workspaceRepo.GetMembershipAsync(workspaceId, identity.Issuer, identity.Subject, ct);
-        if (membership == null || !membership.IsActive)
+        var vinculo = await _repositorioEspacoTrabalho.ObterVinculoMembroAsync(espacoTrabalhoId, identidade.Emissor, identidade.Sujeito, ct);
+        if (vinculo == null)
         {
-            throw new UnauthorizedDomainException($"No active membership found for user '{identity.Subject}' in workspace '{workspaceId}'.");
+            throw new ExcecaoDeNaoAutorizado($"O usuário '{identidade.Sujeito}' não possui vínculo cadastrado no espaço de trabalho '{espacoTrabalhoId}'.");
         }
 
-        // 3. Validate Role hierarchy: Reader (0) <= Contributor (1) <= Maintainer (2)
-        if (membership.Role < minRequiredRole)
+        if (!vinculo.Ativo)
         {
-            throw new UnauthorizedDomainException($"Insufficient role. Required: {minRequiredRole}, actual: {membership.Role}");
+            throw new ExcecaoDeNaoAutorizado($"O vínculo do usuário '{identidade.Sujeito}' no espaço de trabalho '{espacoTrabalhoId}' está inativo.");
         }
 
-        return membership;
+        if (!PossuiPapelSuficiente(vinculo.Papel, papelMinimoObrigatorio))
+        {
+            throw new ExcecaoDeNaoAutorizado($"Papel insuficiente. Atual: '{vinculo.Papel}', Mínimo exigido: '{papelMinimoObrigatorio}'.");
+        }
+
+        return vinculo;
+    }
+
+    private static bool PossuiPapelSuficiente(PapelUsuario papelAtual, PapelUsuario papelNecessario)
+    {
+        var niveis = new Dictionary<PapelUsuario, int>
+        {
+            [PapelUsuario.Leitor] = 1,
+            [PapelUsuario.Colaborador] = 2,
+            [PapelUsuario.Mantenedor] = 3,
+            [PapelUsuario.Reader] = 1,
+            [PapelUsuario.Contributor] = 2,
+            [PapelUsuario.Maintainer] = 3
+        };
+
+        return niveis.GetValueOrDefault(papelAtual, 0) >= niveis.GetValueOrDefault(papelNecessario, 0);
     }
 }

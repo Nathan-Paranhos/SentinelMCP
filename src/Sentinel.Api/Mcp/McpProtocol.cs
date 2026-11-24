@@ -100,27 +100,38 @@ public sealed class McpToolResult
         {
             IsError = false,
             StructuredContent = structuredData,
-            Content = [new McpContentItem { Type = "text", Text = textSummary }]
+            Content =
+            [
+                new McpContentItem
+                {
+                    Type = "text",
+                    Text = textSummary
+                }
+            ]
         };
     }
 
-    public static McpToolResult Error(string errorCode, string message, object? extra = null)
+    public static McpToolResult Error(string code, string message, object? details = null)
     {
-        var errorObj = new Dictionary<string, object?>
+        var errorObj = new
         {
-            ["code"] = errorCode,
-            ["message"] = message
+            code,
+            message,
+            details
         };
-        if (extra != null)
-        {
-            errorObj["details"] = extra;
-        }
 
         return new McpToolResult
         {
             IsError = true,
             StructuredContent = errorObj,
-            Content = [new McpContentItem { Type = "text", Text = $"Error [{errorCode}]: {message}" }]
+            Content =
+            [
+                new McpContentItem
+                {
+                    Type = "text",
+                    Text = $"Error [{code}]: {message}"
+                }
+            ]
         };
     }
 }

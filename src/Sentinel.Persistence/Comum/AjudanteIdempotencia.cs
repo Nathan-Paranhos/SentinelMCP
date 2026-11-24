@@ -2,19 +2,19 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 
-namespace Sentinel.Persistence.Common;
+namespace Sentinel.Persistence.Comum;
 
-public static class IdempotencyHelper
+public static class AjudanteIdempotencia
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
+    private static readonly JsonSerializerOptions OpcoesJson = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         WriteIndented = false
     };
 
-    public static string ComputeFingerprint<T>(T arguments)
+    public static string CalcularImpressaoDigital<T>(T argumentos)
     {
-        var json = JsonSerializer.Serialize(arguments, JsonOptions);
+        var json = JsonSerializer.Serialize(argumentos, OpcoesJson);
         var bytes = Encoding.UTF8.GetBytes(json);
         var hash = SHA256.HashData(bytes);
         return Convert.ToHexString(hash).ToLowerInvariant();
