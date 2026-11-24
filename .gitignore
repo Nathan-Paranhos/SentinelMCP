@@ -1,0 +1,25 @@
+# Visual Studio / .NET Core
+bin/
+obj/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs & Environment
+*.log
+.env
+.env.local
+
+# Rider / VS Code
+.idea/
+.vscode/
+
+# Testes e Cobertura
+TestResults/
+coverage/
+
+# Archives & Binaries
+*.zip
+*.tar.gz
+

@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-and-test:
+    name: Build & Test (Unit, Contract & Integration)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: sentinel_mcp
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgrespassword
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 9 SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore Dependencies
+        run: dotnet restore Sentinel.sln
+
+      - name: Build Solution
+        run: dotnet build Sentinel.sln --no-restore -c Release
+
+      - name: Run Unit Tests
+        run: dotnet test tests/Sentinel.UnitTests/Sentinel.UnitTests.csproj --no-build -c Release --logger "console;verbosity=normal"
+
+      - name: Run MCP Contract Tests
+        run: dotnet test tests/Sentinel.ContractTests/Sentinel.ContractTests.csproj --no-build -c Release --logger "console;verbosity=normal"
+
+      - name: Run Acceptance Criteria Integration Tests
+        run: dotnet test tests/Sentinel.IntegrationTests/Sentinel.IntegrationTests.csproj --no-build -c Release --logger "console;verbosity=normal"

@@ -1,0 +1,38 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: sentinel-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentinel_mcp
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgrespassword
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sentinel_mcp"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  sentinel-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sentinel-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      Sentinel__StorageProvider: PostgreSQL
+      ConnectionStrings__Database: "Host=postgres;Port=5432;Database=sentinel_mcp;Username=postgres;Password=postgrespassword;Include Error Detail=true;"
+    ports:
+      - "5000:5000"
+
+volumes:
+  postgres_data:
