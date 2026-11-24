@@ -73,259 +73,589 @@ public sealed class WebReviewHandler
 <head>
     <meta charset=""UTF-8"">
     <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
-    <title>Sentinel-MCP — Painel de Governança e Revisão</title>
+    <title>Sentinel — Revisão de Decisões</title>
     <link rel=""icon"" href=""/sentinel-verde.svg"" type=""image/svg+xml"">
     <style>
         :root {{
-            --bg-page: #0B1008;
-            --bg-surface: #13200D;
-            --bg-elevated: #0E170A;
-            --border-primary: #243B12;
-            --border-accent: #355414;
-            --brand-neon: #A3E635;
-            --brand-lime: #B8F34B;
-            --brand-glow: #D9FF8A;
-            --brand-dark: #559912;
-            --text-primary: #F8FAFC;
-            --text-secondary: #E8F5D8;
-            --text-muted: #94A3B8;
-            --status-danger: #EF4444;
+            --ios-bg: #000000;
+            --ios-surface: rgba(28, 28, 30, 0.72);
+            --ios-surface-elevated: rgba(44, 44, 46, 0.65);
+            --ios-surface-card: rgba(22, 28, 22, 0.68);
+            --ios-glass-border: rgba(255, 255, 255, 0.08);
+            --ios-glass-border-hover: rgba(52, 199, 89, 0.28);
+            --ios-green: #30D158;
+            --ios-green-tint: rgba(48, 209, 88, 0.12);
+            --ios-green-border: rgba(48, 209, 88, 0.22);
+            --ios-red: #FF453A;
+            --ios-red-tint: rgba(255, 69, 58, 0.12);
+            --ios-red-border: rgba(255, 69, 58, 0.22);
+            --ios-label-primary: #FFFFFF;
+            --ios-label-secondary: rgba(235, 235, 245, 0.6);
+            --ios-label-tertiary: rgba(235, 235, 245, 0.38);
+            --ios-separator: rgba(255, 255, 255, 0.06);
+            --ios-font: -apple-system, BlinkMacSystemFont, ""SF Pro Display"", ""SF Pro Text"", ""Helvetica Neue"", sans-serif;
+            --ios-radius-card: 22px;
+            --ios-radius-btn: 9999px;
+            --ios-radius-inner: 14px;
         }}
-        * {{ box-sizing: border-box; }}
+        * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }}
         body {{
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
-            background: var(--bg-page);
-            color: var(--text-primary);
+            font-family: var(--ios-font);
+            background-color: var(--ios-bg);
+            background-image: 
+                radial-gradient(900px circle at 50% -10%, rgba(48, 209, 88, 0.09), transparent 50%),
+                radial-gradient(700px circle at 90% 100%, rgba(52, 199, 89, 0.05), transparent 45%);
+            background-attachment: fixed;
+            color: var(--ios-label-primary);
             margin: 0;
             padding: 0;
             min-height: 100vh;
             overflow-x: hidden;
+            letter-spacing: -0.015em;
         }}
+
         #loading-screen {{
             position: fixed;
             top: 0; left: 0; width: 100vw; height: 100vh;
-            background: var(--bg-page);
+            background: rgba(0, 0, 0, 0.94);
+            backdrop-filter: blur(40px);
+            -webkit-backdrop-filter: blur(40px);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            z-index: 9999;
-            transition: opacity 0.6s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.6s;
+            z-index: 99999;
+            transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.5s, transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
         }}
         #loading-screen.oculto {{
             opacity: 0;
             visibility: hidden;
+            transform: scale(1.02);
             pointer-events: none;
         }}
-        .mascot-container {{
-            width: 280px;
-            height: 280px;
+        .mascot-stage {{
+            position: relative;
+            width: 220px;
+            height: 220px;
             display: flex;
             align-items: center;
             justify-content: center;
+        }}
+        .mascot-ambient-glow {{
+            position: absolute;
+            width: 180px;
+            height: 180px;
+            border-radius: 50%;
+            background: radial-gradient(circle, rgba(48, 209, 88, 0.35) 0%, rgba(48, 209, 88, 0) 70%);
+            filter: blur(24px);
+            pointer-events: none;
+            z-index: 1;
         }}
         .mascot-svg {{
             width: 100%;
             height: 100%;
             overflow: visible;
+            position: relative;
+            z-index: 2;
+            filter: drop-shadow(0 14px 28px rgba(0, 0, 0, 0.6));
+        }}
+        .loading-meta {{
+            margin-top: 1.75rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.65rem;
         }}
         .loading-title {{
-            margin-top: 1.5rem;
-            font-size: 1.25rem;
-            font-weight: 700;
-            color: var(--brand-neon);
-            letter-spacing: 0.05em;
+            font-size: 0.95rem;
+            font-weight: 600;
+            color: var(--ios-label-primary);
+            letter-spacing: -0.01em;
         }}
-        .loading-bar {{
-            width: 220px;
+        .loading-subtitle {{
+            font-size: 0.78rem;
+            color: var(--ios-label-secondary);
+        }}
+        .ios-progress-track {{
+            width: 130px;
             height: 4px;
-            background: var(--border-primary);
-            border-radius: 999px;
-            margin-top: 1rem;
+            background: rgba(255, 255, 255, 0.12);
+            border-radius: 9999px;
             overflow: hidden;
             position: relative;
+            margin-top: 0.4rem;
         }}
-        .loading-progress {{
+        .ios-progress-indicator {{
             width: 0%;
             height: 100%;
-            background: linear-gradient(90deg, var(--brand-dark), var(--brand-neon));
-            box-shadow: 0 0 10px var(--brand-neon);
-            border-radius: 999px;
-            transition: width 2.4s ease-out;
+            background: linear-gradient(90deg, #30D158, #34C759);
+            border-radius: 9999px;
+            box-shadow: 0 0 8px rgba(48, 209, 88, 0.6);
+            transition: width 1.2s cubic-bezier(0.16, 1, 0.3, 1);
         }}
-        .app-container {{
-            max-width: 1100px;
+
+        #dynamic-island-toast {{
+            position: fixed;
+            top: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(-100px) scale(0.92);
+            background: rgba(24, 24, 26, 0.88);
+            backdrop-filter: blur(28px) saturate(190%);
+            -webkit-backdrop-filter: blur(28px) saturate(190%);
+            border: 1px solid var(--ios-glass-border);
+            border-radius: 9999px;
+            padding: 10px 22px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            z-index: 100000;
+            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+            opacity: 0;
+            pointer-events: none;
+            transition: transform 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.35s ease;
+        }}
+        #dynamic-island-toast.visivel {{
+            transform: translateX(-50%) translateY(0) scale(1);
+            opacity: 1;
+            pointer-events: auto;
+        }}
+        .toast-icon {{
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 11px;
+            font-weight: 700;
+        }}
+        .toast-icon.sucesso {{
+            background: var(--ios-green);
+            color: #000;
+        }}
+        .toast-icon.erro {{
+            background: var(--ios-red);
+            color: #fff;
+        }}
+        .toast-text {{
+            font-size: 0.88rem;
+            font-weight: 500;
+            color: #fff;
+            white-space: nowrap;
+        }}
+
+        .app-layout {{
+            max-width: 960px;
             margin: 0 auto;
-            padding: 2.5rem 1.5rem;
+            padding: 2rem 1.25rem 4rem;
         }}
-        header {{
-            background: var(--bg-surface);
-            border: 1px solid var(--border-primary);
-            border-radius: 16px;
-            padding: 1.5rem 2rem;
+
+        .nav-bar {{
+            position: sticky;
+            top: 16px;
+            z-index: 1000;
+            background: rgba(22, 28, 22, 0.72);
+            backdrop-filter: blur(28px) saturate(190%);
+            -webkit-backdrop-filter: blur(28px) saturate(190%);
+            border: 1px solid var(--ios-glass-border);
+            border-radius: 20px;
+            padding: 0.85rem 1.4rem;
             display: flex;
             justify-content: space-between;
             align-items: center;
             margin-bottom: 2rem;
-            box-shadow: 0 8px 30px rgba(0,0,0,0.5);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            transition: border-color 0.3s;
         }}
-        .brand-box {{
+        .nav-bar:hover {{
+            border-color: rgba(255, 255, 255, 0.12);
+        }}
+        .brand-group {{
             display: flex;
             align-items: center;
-            gap: 1.25rem;
+            gap: 12px;
         }}
-        .brand-icon {{
-            width: 52px;
-            height: 52px;
-            border-radius: 12px;
-            border: 1px solid var(--border-accent);
+        .brand-avatar {{
+            width: 40px;
+            height: 40px;
+            border-radius: 11px;
+            background: rgba(48, 209, 88, 0.08);
+            border: 1px solid var(--ios-green-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
             padding: 4px;
-            background: var(--bg-elevated);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
         }}
-        h1 {{
+        .brand-avatar img {{
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+        }}
+        .brand-text h1 {{
             margin: 0;
-            font-size: 1.4rem;
-            color: var(--brand-neon);
-            letter-spacing: -0.01em;
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: var(--ios-label-primary);
+            letter-spacing: -0.02em;
         }}
-        .meta-header {{
-            color: var(--text-muted);
-            font-size: 0.85rem;
-            margin-top: 0.2rem;
+        .brand-text .subtext {{
+            font-size: 0.76rem;
+            color: var(--ios-label-secondary);
+            margin-top: 1px;
         }}
-        .header-actions {{
+        .nav-controls {{
             display: flex;
             align-items: center;
-            gap: 1rem;
+            gap: 10px;
         }}
-        .badge {{
-            background: rgba(163, 230, 53, 0.12);
-            color: var(--brand-neon);
-            border: 1px solid var(--border-accent);
-            padding: 0.35rem 0.75rem;
-            border-radius: 999px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
+        .ios-pill {{
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 5px 12px;
+            border-radius: var(--ios-radius-btn);
+            font-size: 0.76rem;
+            font-weight: 500;
         }}
-        .btn-replay {{
-            background: transparent;
-            color: var(--brand-neon);
-            border: 1px solid var(--border-accent);
-            padding: 0.4rem 0.9rem;
-            border-radius: 8px;
+        .ios-pill-status {{
+            background: var(--ios-green-tint);
+            color: var(--ios-green);
+            border: 1px solid var(--ios-green-border);
+        }}
+        .status-dot {{
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--ios-green);
+            box-shadow: 0 0 6px var(--ios-green);
+        }}
+        .btn-ios-subtle {{
+            background: rgba(255, 255, 255, 0.07);
+            border: 1px solid var(--ios-glass-border);
+            color: var(--ios-label-primary);
+            padding: 6px 14px;
+            border-radius: var(--ios-radius-btn);
             font-size: 0.8rem;
-            font-weight: 600;
+            font-weight: 500;
             cursor: pointer;
-            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         }}
-        .btn-replay:hover {{
-            background: var(--border-primary);
-            border-color: var(--brand-neon);
+        .btn-ios-subtle:hover {{
+            background: rgba(255, 255, 255, 0.12);
+            border-color: rgba(255, 255, 255, 0.16);
+            transform: scale(1.02);
         }}
-        .card {{
-            background: var(--bg-surface);
-            border: 1px solid var(--border-primary);
-            border-radius: 14px;
-            padding: 1.75rem;
-            margin-bottom: 1.75rem;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-            transition: border-color 0.2s;
+        .btn-ios-subtle:active {{
+            transform: scale(0.97);
         }}
-        .card:hover {{
-            border-color: var(--border-accent);
+
+        .proposals-stack {{
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
         }}
-        .card h2 {{
-            margin-top: 0;
-            color: var(--brand-glow);
-            font-size: 1.25rem;
+
+        .ios-card {{
+            background: var(--ios-surface-card);
+            backdrop-filter: blur(28px) saturate(180%);
+            -webkit-backdrop-filter: blur(28px) saturate(180%);
+            border: 1px solid var(--ios-glass-border);
+            border-radius: var(--ios-radius-card);
+            padding: 1.85rem;
+            box-shadow: 0 10px 36px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s, box-shadow 0.3s;
+            position: relative;
+            overflow: hidden;
         }}
-        .meta {{
-            color: var(--text-muted);
-            font-size: 0.85rem;
+        .ios-card:hover {{
+            border-color: var(--ios-glass-border-hover);
+            transform: translateY(-2px);
+            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        }}
+        .card-top-bar {{
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 1rem;
             margin-bottom: 1rem;
         }}
-        code {{
-            background: var(--bg-elevated);
-            color: var(--brand-lime);
-            padding: 0.2rem 0.4rem;
-            border-radius: 4px;
-            font-size: 0.85rem;
-            border: 1px solid var(--border-primary);
-        }}
-        .summary {{
-            background: var(--bg-elevated);
-            padding: 1.25rem;
-            border-radius: 8px;
-            margin: 1.25rem 0;
-            border-left: 4px solid var(--brand-neon);
-            color: var(--text-secondary);
-            line-height: 1.5;
-        }}
-        .evidence-list {{
-            list-style: none;
-            padding: 0;
-            margin: 1rem 0;
-        }}
-        .evidence-list li {{
-            margin-bottom: 0.6rem;
-            font-size: 0.9rem;
-        }}
-        .evidence-list a {{
-            color: var(--brand-neon);
-            text-decoration: none;
-            border-bottom: 1px dotted var(--brand-dark);
-        }}
-        .evidence-list a:hover {{
-            color: var(--brand-glow);
-            border-bottom-style: solid;
-        }}
-        .actions {{
+        .card-pills {{
             display: flex;
-            gap: 1rem;
-            margin-top: 1.5rem;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
         }}
-        button.action-btn {{
-            padding: 0.65rem 1.4rem;
-            border-radius: 8px;
+        .topic-pill {{
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--ios-glass-border);
+            border-radius: var(--ios-radius-btn);
+            padding: 3px 10px;
+            font-size: 0.74rem;
+            font-weight: 500;
+            color: var(--ios-green);
+            font-family: ui-monospace, SFMono-Regular, monospace;
+        }}
+        .version-pill {{
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--ios-glass-border);
+            border-radius: var(--ios-radius-btn);
+            padding: 3px 9px;
+            font-size: 0.72rem;
+            font-weight: 500;
+            color: var(--ios-label-secondary);
+        }}
+        .card-title {{
+            margin: 0 0 1rem;
+            font-size: 1.35rem;
+            font-weight: 600;
+            color: var(--ios-label-primary);
+            letter-spacing: -0.02em;
+            line-height: 1.35;
+        }}
+
+        .ios-inset-box {{
+            background: rgba(14, 18, 14, 0.65);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: var(--ios-radius-inner);
+            padding: 1.25rem;
+            margin-bottom: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+        }}
+        .inset-row {{
+            font-size: 0.9rem;
+            line-height: 1.5;
+            color: var(--ios-label-secondary);
+        }}
+        .inset-row strong {{
+            color: var(--ios-label-primary);
+            font-weight: 600;
+            margin-right: 4px;
+        }}
+
+        .section-heading {{
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            color: var(--ios-label-tertiary);
+            margin: 1.25rem 0 0.6rem;
+        }}
+
+        .evidence-grid {{
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 1.5rem;
+        }}
+        .evidence-row {{
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            border-radius: 12px;
+            padding: 9px 14px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            text-decoration: none;
+            color: var(--ios-label-secondary);
+            font-size: 0.85rem;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }}
+        .evidence-row:hover {{
+            background: rgba(48, 209, 88, 0.08);
+            border-color: var(--ios-green-border);
+            color: #fff;
+            transform: translateX(3px);
+        }}
+        .evidence-meta {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+        .evidence-tag {{
+            font-size: 0.68rem;
+            text-transform: uppercase;
+            font-weight: 600;
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--ios-green);
+            padding: 2px 7px;
+            border-radius: 5px;
+        }}
+        .evidence-chevron {{
+            font-size: 1rem;
+            color: var(--ios-label-tertiary);
+        }}
+
+        .card-actions {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 1.5rem;
+            padding-top: 1.25rem;
+            border-top: 1px solid var(--ios-separator);
+        }}
+        .btn-ios-primary {{
+            background: var(--ios-green);
+            color: #031505;
+            border: none;
+            border-radius: var(--ios-radius-btn);
+            padding: 0.65rem 1.6rem;
+            font-size: 0.88rem;
             font-weight: 600;
             cursor: pointer;
-            border: none;
-            font-size: 0.875rem;
-            transition: all 0.2s;
+            letter-spacing: -0.01em;
+            box-shadow: 0 2px 10px rgba(48, 209, 88, 0.3);
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         }}
-        .btn-approve {{
-            background: var(--brand-neon);
-            color: #0B1008;
+        .btn-ios-primary:hover {{
+            background: #34C759;
+            box-shadow: 0 4px 16px rgba(48, 209, 88, 0.45);
+            transform: scale(1.02);
         }}
-        .btn-approve:hover {{
-            background: var(--brand-lime);
-            box-shadow: 0 0 15px rgba(163, 230, 53, 0.4);
+        .btn-ios-primary:active {{
+            transform: scale(0.97);
         }}
-        .btn-reject {{
-            background: transparent;
-            color: var(--status-danger);
-            border: 1px solid #7F1D1D;
+        .btn-ios-destructive {{
+            background: var(--ios-red-tint);
+            color: var(--ios-red);
+            border: 1px solid var(--ios-red-border);
+            border-radius: var(--ios-radius-btn);
+            padding: 0.65rem 1.4rem;
+            font-size: 0.88rem;
+            font-weight: 600;
+            cursor: pointer;
+            letter-spacing: -0.01em;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         }}
-        .btn-reject:hover {{
-            background: rgba(239, 68, 68, 0.1);
-            border-color: var(--status-danger);
+        .btn-ios-destructive:hover {{
+            background: rgba(255, 69, 58, 0.2);
+            border-color: rgba(255, 69, 58, 0.35);
+            transform: scale(1.02);
         }}
-        .empty-state {{
+        .btn-ios-destructive:active {{
+            transform: scale(0.97);
+        }}
+
+        .empty-dashboard {{
             text-align: center;
-            padding: 4rem 2rem;
-            color: var(--text-muted);
+            padding: 4.5rem 2rem;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
         }}
-        .empty-state h3 {{
-            color: var(--brand-lime);
+        .empty-icon-wrap {{
+            width: 72px;
+            height: 72px;
+            border-radius: 20px;
+            background: rgba(48, 209, 88, 0.08);
+            border: 1px solid var(--ios-green-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 1.25rem;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }}
+        .empty-icon-wrap img {{
+            width: 44px;
+            height: 44px;
+        }}
+        .empty-title {{
             font-size: 1.2rem;
-            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: var(--ios-label-primary);
+            margin: 0 0 0.5rem;
+        }}
+        .empty-desc {{
+            font-size: 0.88rem;
+            color: var(--ios-label-secondary);
+            max-width: 420px;
+            margin: 0 auto;
+            line-height: 1.45;
+        }}
+
+        .ios-modal-backdrop {{
+            position: fixed;
+            top: 0; left: 0; width: 100vw; height: 100vh;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10000;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.28s ease, visibility 0.28s;
+        }}
+        .ios-modal-backdrop.ativo {{
+            opacity: 1;
+            visibility: visible;
+        }}
+        .ios-modal-sheet {{
+            background: rgba(28, 34, 28, 0.92);
+            border: 1px solid var(--ios-glass-border);
+            border-radius: 24px;
+            width: 90%;
+            max-width: 440px;
+            padding: 1.75rem;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            transform: scale(0.92) translateY(12px);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+        }}
+        .ios-modal-backdrop.ativo .ios-modal-sheet {{
+            transform: scale(1) translateY(0);
+        }}
+        .modal-header h3 {{
+            margin: 0;
+            font-size: 1.15rem;
+            font-weight: 600;
+            color: #fff;
+        }}
+        .modal-header p {{
+            margin: 0.35rem 0 0;
+            font-size: 0.85rem;
+            color: var(--ios-label-secondary);
+            line-height: 1.4;
+        }}
+        .ios-input-field {{
+            width: 100%;
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--ios-glass-border);
+            border-radius: 12px;
+            color: #fff;
+            padding: 12px 14px;
+            font-family: inherit;
+            font-size: 0.9rem;
+            resize: none;
+            min-height: 85px;
+            outline: none;
+            box-sizing: border-box;
+            transition: border-color 0.2s;
+        }}
+        .ios-input-field:focus {{
+            border-color: var(--ios-green);
+        }}
+        .modal-actions {{
+            display: flex;
+            justify-content: flex-end;
+            gap: 10px;
+            margin-top: 0.5rem;
         }}
     </style>
 </head>
 <body>
     <div id=""loading-screen"">
-        <div class=""mascot-container"">
+        <div class=""mascot-stage"">
+            <div class=""mascot-ambient-glow""></div>
             <svg id=""sentinel-mascot"" class=""mascot-svg"" viewBox=""0 0 1024 1024"" role=""img"" aria-label=""Mascote Sentinel"">
                 <defs>
                     <radialGradient id=""sm-face"" cx=""50%"" cy=""57%"" r=""66%"">
@@ -355,91 +685,123 @@ public sealed class WebReviewHandler
                         <path d=""M512 0H1024V1024H512Z"" />
                     </clipPath>
                     <clipPath id=""sm-smile"">
-                        <path id=""mouth-clip"" d=""M399 566 Q512 585 632 549 Q644 546 642 560 C637 580 585 596 520 596 C462 596 413 590 398 577 Q394 566 399 566Z"" />
+                        <path id=""mouth-clip"" d=""M399 566 Q512 585 632 549 Q644 546 642 560 C631 625 581 671 520 671 C462 671 417 634 398 577 Q394 566 399 566Z"" />
                     </clipPath>
-                    <filter id=""sm-shadow"" x=""-15%"" y=""-15%"" width=""130%"" height=""140%"" color-interpolation-filters=""sRGB"">
-                        <feDropShadow dx=""0"" dy=""26"" stdDeviation=""22"" flood-color=""#20380C"" flood-opacity=""0.4"" />
-                    </filter>
-                    <filter id=""sm-groundBlur"" x=""-30%"" y=""-200%"" width=""160%"" height=""500%"">
-                        <feGaussianBlur stdDeviation=""14"" />
-                    </filter>
                 </defs>
-                <ellipse id=""sm-ground"" cx=""512"" cy=""942"" rx=""230"" ry=""24"" fill=""#20380C"" fill-opacity="".38"" filter=""url(#sm-groundBlur)"" />
-                <g id=""sm-shell"" filter=""url(#sm-shadow)"">
-                    <path id=""sm-face"" d=""M512 161A351 351 0 1 1 512 863A351 351 0 1 1 512 161Z"" pathLength=""1"" fill=""url(#sm-face)"" stroke-linecap=""round"" stroke-linejoin=""round"" />
-                    <g fill=""url(#sm-petal)"" stroke-linecap=""round"" stroke-linejoin=""round"">
-                        <path class=""sm-petal"" data-order=""0"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" pathLength=""1"" transform=""rotate(0 512 512)"" />
-                        <path class=""sm-petal"" data-order=""5"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" pathLength=""1"" transform=""rotate(300 512 512)"" />
-                        <path class=""sm-petal"" data-order=""4"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" pathLength=""1"" transform=""rotate(240 512 512)"" />
-                        <path class=""sm-petal"" data-order=""3"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" pathLength=""1"" transform=""rotate(180 512 512)"" />
-                        <path class=""sm-petal"" data-order=""2"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" pathLength=""1"" transform=""rotate(120 512 512)"" />
-                        <path class=""sm-petal"" data-order=""1"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" pathLength=""1"" transform=""rotate(60 512 512)"" />
-                        <path class=""sm-petal"" data-order=""0"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" pathLength=""1"" clip-path=""url(#sm-top)"" />
+                <g id=""sm-character"">
+                    <path id=""sm-face"" d=""M512 161A351 351 0 1 1 512 863A351 351 0 1 1 512 161Z"" fill=""url(#sm-face)"" />
+                    <g id=""sm-petals-group"" fill=""url(#sm-petal)"">
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(0 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(300 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(240 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(180 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(120 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(60 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" clip-path=""url(#sm-top)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
                     </g>
-                </g>
-                <g fill=""url(#sm-eye)"" stroke-linecap=""round"" stroke-linejoin=""round"">
-                    <path id=""sm-eye-l"" class=""sm-eye"" d=""M334 496 C339 457 390 411 429 410 C460 409 473 434 473 468 L473 485 C473 512 460 526 435 528 L371 533 C346 535 331 521 334 496Z"" pathLength=""1"" />
-                    <path id=""sm-eye-r"" class=""sm-eye"" d=""M551 468 C551 434 564 409 595 410 C634 411 685 457 690 496 C693 521 678 535 653 533 L589 528 C564 526 551 512 551 485Z"" pathLength=""1"" />
-                </g>
-                <path id=""sm-mouth"" d=""M399 566 Q512 585 632 549 Q644 546 642 560 C637 580 585 596 520 596 C462 596 413 590 398 577 Q394 566 399 566Z"" pathLength=""1"" fill=""url(#sm-mouth)"" stroke-linecap=""round"" stroke-linejoin=""round"" />
-                <g clip-path=""url(#sm-smile)"">
-                    <path id=""sm-tongue"" d=""M449 668A91 54 0 1 1 631 668A91 54 0 1 1 449 668Z"" fill=""url(#sm-tongue)"" />
-                    <path id=""sm-teeth"" d=""M390 557 Q507 580 648 542 L649 557 Q529 608 407 584Z"" fill=""url(#sm-eye)"" />
+                    <g id=""sm-eyes-group"" fill=""url(#sm-eye)"">
+                        <path id=""sm-eye-l"" d=""M334 496 C339 457 390 411 429 410 C460 409 473 434 473 468 L473 485 C473 512 460 526 435 528 L371 533 C346 535 331 521 334 496Z"" />
+                        <path id=""sm-eye-r"" d=""M551 468 C551 434 564 409 595 410 C634 411 685 457 690 496 C693 521 678 535 653 533 L589 528 C564 526 551 512 551 485Z"" />
+                    </g>
+                    <path id=""sm-mouth"" d=""M399 566 Q512 585 632 549 Q644 546 642 560 C631 625 581 671 520 671 C462 671 417 634 398 577 Q394 566 399 566Z"" fill=""url(#sm-mouth)"" stroke=""#7EBB28"" stroke-width=""2"" />
+                    <g clip-path=""url(#sm-smile)"">
+                        <path id=""sm-tongue"" d=""M449 668A91 54 0 1 1 631 668A91 54 0 1 1 449 668Z"" fill=""url(#sm-tongue)"" />
+                        <path id=""sm-teeth"" d=""M390 557 Q507 580 648 542 L649 557 Q529 608 407 584Z"" fill=""url(#sm-eye)"" />
+                    </g>
                 </g>
             </svg>
         </div>
-        <div class=""loading-title"">INICIALIZANDO SENTINEL-MCP</div>
-        <div class=""loading-bar"">
-            <div id=""loading-progress"" class=""loading-progress""></div>
+        <div class=""loading-meta"">
+            <div class=""loading-title"">Sentinel</div>
+            <div class=""loading-subtitle"">Conectando ao núcleo de governança...</div>
+            <div class=""ios-progress-track"">
+                <div id=""loading-progress"" class=""ios-progress-indicator""></div>
+            </div>
         </div>
     </div>
 
-    <div class=""app-container"">
-        <header>
-            <div class=""brand-box"">
-                <img src=""/sentinel-verde.svg"" alt=""Sentinel Logo"" class=""brand-icon"">
-                <div>
-                    <h1>Sentinel-MCP — Portal de Revisão Humana</h1>
-                    <div class=""meta-header"">Governança Arquitetural & Auditoria Imutável de Decisões</div>
+    <div id=""dynamic-island-toast"">
+        <div id=""toast-icon"" class=""toast-icon sucesso"">✓</div>
+        <div id=""toast-text"" class=""toast-text"">Operação realizada</div>
+    </div>
+
+    <div class=""app-layout"">
+        <header class=""nav-bar"">
+            <div class=""brand-group"">
+                <div class=""brand-avatar"">
+                    <img src=""/sentinel-verde.svg"" alt=""Sentinel"">
+                </div>
+                <div class=""brand-text"">
+                    <h1>Sentinel</h1>
+                    <div class=""subtext"">Portal de Revisão Humana</div>
                 </div>
             </div>
-            <div class=""header-actions"">
-                <button class=""btn-replay"" onclick=""reexecutarAnimacaoCarregamento()"">Replay Mascote</button>
-                <span class=""badge"">Papel: Maintainer</span>
+            <div class=""nav-controls"">
+                <button class=""btn-ios-subtle"" onclick=""reexecutarAnimacaoCarregamento()"">
+                    <span>Replay Mascote</span>
+                </button>
+                <div class=""ios-pill ios-pill-status"">
+                    <span class=""status-dot""></span>
+                    <span>Maintainer</span>
+                </div>
             </div>
         </header>
 
-        <main id=""proposals-container"">";
+        <main id=""proposals-container"" class=""proposals-stack"">";
 
         if (propostas.Count == 0)
         {
-            html += @"<div class=""card empty-state"">
-                <h3>Nenhuma proposta pendente no momento.</h3>
-                <p>Novas propostas submetidas por agentes via tool <code>propose_decision</code> aparecerão aqui para validação humana.</p>
+            html += @"
+            <div class=""ios-card empty-dashboard"">
+                <div class=""empty-icon-wrap"">
+                    <img src=""/sentinel-verde.svg"" alt=""Sentinel"">
+                </div>
+                <h2 class=""empty-title"">Tudo em dia com a governança</h2>
+                <p class=""empty-desc"">Nenhuma proposta arquitetural pendente de validação humana no momento. Novas propostas submetidas por agentes via <code>propose_decision</code> serão exibidas aqui.</p>
             </div>";
         }
         else
         {
             foreach (var p in propostas)
             {
-                var evidenciasHtml = string.Join("", p.Evidencias.Select(e => $"<li><strong>[{e.Tipo}]</strong> <a href=\"{e.Url}\" target=\"_blank\">{e.Rotulo}</a></li>"));
+                var evidenciasHtml = string.Join("", p.Evidencias.Select(e => $@"
+                    <a href=""{e.Url}"" target=""_blank"" rel=""noopener noreferrer"" class=""evidence-row"">
+                        <div class=""evidence-meta"">
+                            <span class=""evidence-tag"">{e.Tipo}</span>
+                            <span>{e.Rotulo}</span>
+                        </div>
+                        <span class=""evidence-chevron"">›</span>
+                    </a>"));
+
                 html += $@"
-                <div class=""card"" id=""card-{p.TopicoId}"">
-                    <h2>{p.Titulo}</h2>
-                    <div class=""meta"">
-                        Tópico: <code>{p.ChaveTopico}</code> | Versão Corrente: {p.VersaoFluxo} | Espaço: <code>{p.EspacoTrabalhoId}</code>
+                <article class=""ios-card"" id=""card-{p.TopicoId}"">
+                    <div class=""card-top-bar"">
+                        <div class=""card-pills"">
+                            <span class=""topic-pill"">tópico: {p.ChaveTopico}</span>
+                            <span class=""version-pill"">v{p.VersaoFluxo}</span>
+                        </div>
                     </div>
-                    <div class=""summary"">
-                        <strong>Resumo:</strong> {p.Resumo}<br><br>
-                        <strong>Justificativa:</strong> {p.Justificativa ?? "N/A"}
+                    <h2 class=""card-title"">{p.Titulo}</h2>
+                    
+                    <div class=""ios-inset-box"">
+                        <div class=""inset-row"">
+                            <strong>Resumo:</strong> {p.Resumo}
+                        </div>
+                        <div class=""inset-row"">
+                            <strong>Justificativa Técnica:</strong> {p.Justificativa ?? "Decisão proposta para governança técnica contínua."}
+                        </div>
                     </div>
-                    <h4>Evidências Anexadas:</h4>
-                    <ul class=""evidence-list"">{evidenciasHtml}</ul>
-                    <div class=""actions"">
-                        <button class=""action-btn btn-approve"" onclick=""aprovarProposta('{p.EspacoTrabalhoId}', '{p.ProjetoId}', '{p.TopicoId}', '{p.PropostaPendenteId ?? p.RegistroAtivoId}', {p.VersaoFluxo})"">Aprovar Decisão</button>
-                        <button class=""action-btn btn-reject"" onclick=""rejeitarProposta('{p.EspacoTrabalhoId}', '{p.ProjetoId}', '{p.TopicoId}', '{p.PropostaPendenteId ?? p.RegistroAtivoId}', {p.VersaoFluxo})"">Rejeitar Proposta</button>
+
+                    <div class=""section-heading"">Evidências e Referências</div>
+                    <div class=""evidence-grid"">
+                        {evidenciasHtml}
                     </div>
-                </div>";
+
+                    <div class=""card-actions"">
+                        <button class=""btn-ios-primary"" onclick=""abrirModalAprovacao('{p.EspacoTrabalhoId}', '{p.ProjetoId}', '{p.TopicoId}', '{p.PropostaPendenteId ?? p.RegistroAtivoId}', {p.VersaoFluxo})"">Aprovar Decisão</button>
+                        <button class=""btn-ios-destructive"" onclick=""abrirModalRejeicao('{p.EspacoTrabalhoId}', '{p.ProjetoId}', '{p.TopicoId}', '{p.PropostaPendenteId ?? p.RegistroAtivoId}', {p.VersaoFluxo})"">Rejeitar</button>
+                    </div>
+                </article>";
             }
         }
 
@@ -447,48 +809,69 @@ public sealed class WebReviewHandler
         </main>
     </div>
 
+    <div id=""ios-modal"" class=""ios-modal-backdrop"">
+        <div class=""ios-modal-sheet"">
+            <div class=""modal-header"">
+                <h3 id=""modal-title"">Confirmar Ação</h3>
+                <p id=""modal-desc"">Deseja prosseguir com a operação de governança?</p>
+            </div>
+            <div id=""modal-input-wrap"" style=""display:none;"">
+                <textarea id=""modal-reason-input"" class=""ios-input-field"" placeholder=""Descreva a justificativa para a rejeição da proposta...""></textarea>
+            </div>
+            <div class=""modal-actions"">
+                <button class=""btn-ios-subtle"" onclick=""fecharModal()"">Cancelar</button>
+                <button id=""modal-confirm-btn"" class=""btn-ios-primary"" onclick=""confirmarAcaoModal()"">Confirmar</button>
+            </div>
+        </div>
+    </div>
+
     <script src=""https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js""></script>
     <script>
         const tokenCsrf = '{tokenCsrf}';
+        let modalPayload = null;
+
+        function exibirToast(mensagem, tipo = 'sucesso') {{
+            const toast = document.getElementById('dynamic-island-toast');
+            const icon = document.getElementById('toast-icon');
+            const text = document.getElementById('toast-text');
+            icon.className = 'toast-icon ' + tipo;
+            icon.textContent = tipo === 'sucesso' ? '✓' : '!';
+            text.textContent = mensagem;
+            toast.classList.add('visivel');
+            setTimeout(() => {{
+                toast.classList.remove('visivel');
+            }}, 3200);
+        }}
 
         function executarAnimacaoMascote(onFinish) {{
             const svg = document.getElementById('sentinel-mascot');
+            const character = document.getElementById('sm-character');
             const face = document.getElementById('sm-face');
             const petals = document.querySelectorAll('.sm-petal');
-            const eyes = document.querySelectorAll('.sm-eye');
             const eyeR = document.getElementById('sm-eye-r');
             const mouth = document.getElementById('sm-mouth');
             const mouthClip = document.getElementById('mouth-clip');
             const teeth = document.getElementById('sm-teeth');
             const tongue = document.getElementById('sm-tongue');
-            const ground = document.getElementById('sm-ground');
-            const bar = document.getElementById('loading-progress');
+            const glow = document.querySelector('.mascot-ambient-glow');
+            const progress = document.getElementById('loading-progress');
 
-            if (bar) bar.style.width = '100%';
+            if (progress) progress.style.width = '100%';
 
             if (typeof gsap === 'undefined') {{
-                setTimeout(onFinish, 1200);
+                setTimeout(onFinish, 1000);
                 return;
             }}
 
-            const contornos = [face, ...petals, ...eyes, mouth];
-            gsap.set(contornos, {{
-                fillOpacity: 0,
-                stroke: '#639C18',
-                strokeOpacity: 1,
-                attr: {{ 'stroke-width': 3.5, 'stroke-dasharray': '1 2', 'stroke-dashoffset': 1 }}
+            gsap.set(character, {{
+                scale: 0.76,
+                opacity: 0,
+                y: 35,
+                transformOrigin: '50% 75%'
             }});
-            gsap.set(ground, {{ opacity: 0, scaleX: 0.6, transformOrigin: '50% 50%' }});
-            gsap.set(teeth, {{ y: -44 }});
-            gsap.set(tongue, {{ y: 26 }});
-            gsap.set(eyes, {{ transformOrigin: '50% 50%' }});
-            gsap.set(svg, {{
-                transformPerspective: 1100,
-                transformOrigin: '50% 88%',
-                scale: 0.96,
-                rotationY: -12,
-                rotationX: 6
-            }});
+            gsap.set(glow, {{ opacity: 0, scale: 0.6 }});
+            gsap.set(teeth, {{ y: -30 }});
+            gsap.set(tongue, {{ y: 20 }});
 
             const tl = gsap.timeline({{
                 onComplete: () => {{
@@ -496,47 +879,69 @@ public sealed class WebReviewHandler
                 }}
             }});
 
-            tl.to(face, {{ attr: {{ 'stroke-dashoffset': 0 }}, duration: 0.75, ease: 'power2.inOut' }}, 0);
-
-            petals.forEach(p => {{
-                const order = Number(p.dataset.order || 0);
-                tl.to(p, {{ attr: {{ 'stroke-dashoffset': 0 }}, duration: 0.62, ease: 'power2.inOut' }}, 0.16 + order * 0.07);
-            }});
-
-            tl.to(eyes, {{ attr: {{ 'stroke-dashoffset': 0 }}, duration: 0.55, ease: 'power2.inOut', stagger: 0.1 }}, 0.5);
-            tl.to(mouth, {{ attr: {{ 'stroke-dashoffset': 0 }}, duration: 0.55, ease: 'power2.inOut' }}, 0.62);
-
-            tl.to(contornos, {{ fillOpacity: 1, duration: 0.5, ease: 'power2.out' }}, 1.1);
-            tl.to(contornos, {{ strokeOpacity: 0, duration: 0.45, ease: 'power1.out' }}, 1.25);
-            tl.to(ground, {{ opacity: 1, scaleX: 1, duration: 0.7, ease: 'power2.out' }}, 1.1);
-
-            tl.to(svg, {{
+            tl.to(character, {{
                 scale: 1,
-                rotationY: 0,
-                rotationX: 0,
-                duration: 0.9,
-                ease: 'back.out(1.2)'
-            }}, 1.1);
+                opacity: 1,
+                y: 0,
+                duration: 0.85,
+                ease: 'back.out(1.5)'
+            }}, 0);
 
-            const bocaAberta = 'M399 566 Q512 585 632 549 Q644 546 642 560 C631 625 581 671 520 671 C462 671 417 634 398 577 Q394 566 399 566Z';
-            tl.to([mouth, mouthClip], {{ attr: {{ d: bocaAberta }}, duration: 0.45, ease: 'back.out(1.8)' }}, 1.7);
-            tl.to(teeth, {{ y: 0, duration: 0.45, ease: 'back.out(1.8)' }}, 1.7);
-            tl.to(tongue, {{ y: 0, duration: 0.45, ease: 'back.out(1.8)' }}, 1.7);
-            tl.to(svg, {{ yPercent: -4, duration: 0.22, ease: 'power2.out', yoyo: true, repeat: 1 }}, 1.75);
+            tl.to(glow, {{
+                opacity: 0.85,
+                scale: 1,
+                duration: 0.85,
+                ease: 'power2.out'
+            }}, 0.05);
 
-            tl.to(eyeR, {{ scaleY: 0.08, duration: 0.12, ease: 'power2.in', yoyo: true, repeat: 1 }}, 2.5);
-            tl.to(svg, {{ rotation: -4, duration: 0.25, ease: 'power2.out', yoyo: true, repeat: 1 }}, 2.5);
+            const bocaSorridente = 'M399 566 Q512 585 632 549 Q644 546 642 560 C631 625 581 671 520 671 C462 671 417 634 398 577 Q394 566 399 566Z';
+            tl.to([mouth, mouthClip], {{
+                attr: {{ d: bocaSorridente }},
+                duration: 0.35,
+                ease: 'back.out(1.8)'
+            }}, 0.55);
+            tl.to([teeth, tongue], {{
+                y: 0,
+                duration: 0.35,
+                ease: 'back.out(1.8)'
+            }}, 0.55);
+
+            tl.to(character, {{
+                y: -10,
+                duration: 0.24,
+                ease: 'power2.out',
+                yoyo: true,
+                repeat: 1
+            }}, 0.6);
+
+            tl.to(eyeR, {{
+                scaleY: 0.1,
+                duration: 0.12,
+                transformOrigin: '50% 50%',
+                ease: 'power2.inOut',
+                yoyo: true,
+                repeat: 1
+            }}, 0.9);
+
+            tl.to(character, {{
+                rotation: -3,
+                duration: 0.22,
+                transformOrigin: '50% 75%',
+                ease: 'power2.out',
+                yoyo: true,
+                repeat: 1
+            }}, 0.9);
         }}
 
         function reexecutarAnimacaoCarregamento() {{
             const screen = document.getElementById('loading-screen');
-            const bar = document.getElementById('loading-progress');
-            if (bar) bar.style.width = '0%';
+            const progress = document.getElementById('loading-progress');
+            if (progress) progress.style.width = '0%';
             screen.classList.remove('oculto');
             executarAnimacaoMascote(() => {{
                 setTimeout(() => {{
                     screen.classList.add('oculto');
-                }}, 400);
+                }}, 300);
             }});
         }}
 
@@ -544,63 +949,112 @@ public sealed class WebReviewHandler
             executarAnimacaoMascote(() => {{
                 setTimeout(() => {{
                     document.getElementById('loading-screen').classList.add('oculto');
-                }}, 500);
+                }}, 350);
             }});
         }});
 
-        async function aprovarProposta(wsId, projId, topicoId, propostaId, versaoAtual) {{
-            if (!confirm('Deseja aprovar esta decisão de arquitetura? Ela será promovida a ativa.')) return;
-            const resp = await fetch('/api/review/approve', {{
-                method: 'POST',
-                headers: {{
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': tokenCsrf,
-                    'X-Sentinel-Web-Session': 'maintainer-alice:https://auth.sentinel.dev'
-                }},
-                body: JSON.stringify({{
-                    workspaceId: wsId,
-                    projectId: projId,
-                    topicId: topicoId,
-                    proposalId: propostaId,
-                    expectedVersion: versaoAtual,
-                    idempotencyKey: 'review-approve-' + Date.now()
-                }})
-            }});
-            if (resp.ok) {{
-                alert('Decisão aprovada e ativada com sucesso!');
-                location.reload();
-            }} else {{
-                const err = await resp.json();
-                alert('Erro ao aprovar: ' + (err.message || 'Falha de validação'));
-            }}
+        function abrirModalAprovacao(wsId, projId, topicoId, propostaId, versaoAtual) {{
+            modalPayload = {{
+                tipo: 'aprovar',
+                wsId, projId, topicoId, propostaId, versaoAtual
+            }};
+            document.getElementById('modal-title').textContent = 'Aprovar Decisão';
+            document.getElementById('modal-desc').textContent = 'Esta proposta será aprovada e ativada imediatamente na governança, substituindo quaisquer decisões ativas anteriores para o mesmo tópico.';
+            document.getElementById('modal-input-wrap').style.display = 'none';
+            const btn = document.getElementById('modal-confirm-btn');
+            btn.className = 'btn-ios-primary';
+            btn.textContent = 'Aprovar Decisão';
+            document.getElementById('ios-modal').classList.add('ativo');
         }}
 
-        async function rejeitarProposta(wsId, projId, topicoId, propostaId, versaoAtual) {{
-            const motivo = prompt('Informe a justificativa da rejeição:');
-            if (!motivo) return;
-            const resp = await fetch('/api/review/reject', {{
-                method: 'POST',
-                headers: {{
-                    'Content-Type': 'application/json',
-                    'X-CSRF-Token': tokenCsrf,
-                    'X-Sentinel-Web-Session': 'maintainer-alice:https://auth.sentinel.dev'
-                }},
-                body: JSON.stringify({{
-                    workspaceId: wsId,
-                    projectId: projId,
-                    topicId: topicoId,
-                    proposalId: propostaId,
-                    expectedVersion: versaoAtual,
-                    reason: motivo,
-                    idempotencyKey: 'review-reject-' + Date.now()
-                }})
-            }});
-            if (resp.ok) {{
-                alert('Proposta rejeitada.');
-                location.reload();
-            }} else {{
-                const err = await resp.json();
-                alert('Erro ao rejeitar: ' + (err.message || 'Falha de validação'));
+        function abrirModalRejeicao(wsId, projId, topicoId, propostaId, versaoAtual) {{
+            modalPayload = {{
+                tipo: 'rejeitar',
+                wsId, projId, topicoId, propostaId, versaoAtual
+            }};
+            document.getElementById('modal-title').textContent = 'Rejeitar Proposta';
+            document.getElementById('modal-desc').textContent = 'Informe a justificativa técnica para rejeição. A proposta será arquivada como rejeitada.';
+            document.getElementById('modal-input-wrap').style.display = 'block';
+            document.getElementById('modal-reason-input').value = '';
+            const btn = document.getElementById('modal-confirm-btn');
+            btn.className = 'btn-ios-destructive';
+            btn.textContent = 'Rejeitar Proposta';
+            document.getElementById('ios-modal').classList.add('ativo');
+        }}
+
+        function fecharModal() {{
+            document.getElementById('ios-modal').classList.remove('ativo');
+            modalPayload = null;
+        }}
+
+        async function confirmarAcaoModal() {{
+            if (!modalPayload) return;
+            const p = modalPayload;
+
+            if (p.tipo === 'aprovar') {{
+                fecharModal();
+                try {{
+                    const resp = await fetch('/api/review/approve', {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/json',
+                            'X-CSRF-Token': tokenCsrf,
+                            'X-Sentinel-Web-Session': 'maintainer-alice:https://auth.sentinel.dev'
+                        }},
+                        body: JSON.stringify({{
+                            workspaceId: p.wsId,
+                            projectId: p.projId,
+                            topicId: p.topicoId,
+                            proposalId: p.propostaId,
+                            expectedVersion: p.versaoAtual,
+                            idempotencyKey: 'review-approve-' + Date.now()
+                        }})
+                    }});
+                    if (resp.ok) {{
+                        exibirToast('Decisão aprovada e ativada com sucesso!');
+                        setTimeout(() => location.reload(), 1200);
+                    }} else {{
+                        const err = await resp.json();
+                        exibirToast('Erro: ' + (err.message || 'Falha de validação'), 'erro');
+                    }}
+                }} catch (e) {{
+                    exibirToast('Erro de comunicação com o servidor', 'erro');
+                }}
+            }} else if (p.tipo === 'rejeitar') {{
+                const motivo = document.getElementById('modal-reason-input').value.trim();
+                if (!motivo) {{
+                    exibirToast('Por favor, digite a justificativa.', 'erro');
+                    return;
+                }}
+                fecharModal();
+                try {{
+                    const resp = await fetch('/api/review/reject', {{
+                        method: 'POST',
+                        headers: {{
+                            'Content-Type': 'application/json',
+                            'X-CSRF-Token': tokenCsrf,
+                            'X-Sentinel-Web-Session': 'maintainer-alice:https://auth.sentinel.dev'
+                        }},
+                        body: JSON.stringify({{
+                            workspaceId: p.wsId,
+                            projectId: p.projId,
+                            topicId: p.topicoId,
+                            proposalId: p.propostaId,
+                            expectedVersion: p.versaoAtual,
+                            reason: motivo,
+                            idempotencyKey: 'review-reject-' + Date.now()
+                        }})
+                    }});
+                    if (resp.ok) {{
+                        exibirToast('Proposta rejeitada com sucesso.');
+                        setTimeout(() => location.reload(), 1200);
+                    }} else {{
+                        const err = await resp.json();
+                        exibirToast('Erro: ' + (err.message || 'Falha de validação'), 'erro');
+                    }}
+                }} catch (e) {{
+                    exibirToast('Erro de comunicação com o servidor', 'erro');
+                }}
             }}
         }}
     </script>
