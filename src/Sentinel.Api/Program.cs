@@ -74,10 +74,15 @@ app.MapMethods("/mcp", ["GET", "POST"], async (HttpContext ctx, McpEndpointHandl
 
 app.MapGet("/", async (HttpContext ctx, WebReviewHandler handler) =>
 {
-    await handler.RenderReviewPageAsync(ctx);
+    await handler.RenderLandingPageAsync(ctx);
 });
 
 app.MapGet("/review", async (HttpContext ctx, WebReviewHandler handler) =>
+{
+    await handler.RenderReviewPageAsync(ctx);
+});
+
+app.MapGet("/app", async (HttpContext ctx, WebReviewHandler handler) =>
 {
     await handler.RenderReviewPageAsync(ctx);
 });
