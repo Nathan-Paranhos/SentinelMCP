@@ -215,30 +215,30 @@ O Sentinel-MCP oferece três modos de transporte compatíveis com qualquer clien
 - **`/mcp/sse`** — Endpoint HTTP stateful via SDK oficial `ModelContextProtocol.AspNetCore`.
 - **`--stdio`** — Transporte local via CLI (`dotnet run --no-build --project src/Sentinel.Api -- --stdio`).
 
-**Toda requisição HTTP precisa de `Authorization: Bearer <token>`**; veja em [Credenciais de agente](#credenciais-de-agente) quais tokens são aceitos. Em desenvolvimento, use um token mock, por exemplo `mock:agent-dev-1|read:memory,write:decision,write:incident|codex`. Veja o guia completo em [docs/guides/conectando-agentes-mcp.md](docs/guides/conectando-agentes-mcp.md).
+**Toda requisição HTTP precisa de `Authorization: Bearer <token>`**. Após criar seu workspace em `/auth/setup`, acesse `/review` → **Conectar IAs (MCP)** para emitir uma **chave de API real por workspace** (`snt_...`, armazenada em hash SHA-256) com os escopos mínimos desejados (`read:memory`, `write:decision`, `write:incident`). Veja o guia passo a passo com screenshots/blocos prontos em [docs/guides/conectando-agentes-mcp.md](docs/guides/conectando-agentes-mcp.md).
 
 ### OpenAI Codex (`codex-cli` e Extensão VS Code)
 
-Via CLI com HTTP:
+Via CLI com HTTP (usando a chave `snt_...` emitida no console):
 ```powershell
-$env:SENTINEL_MCP_TOKEN = "mock:agent-dev-1|read:memory,write:decision,write:incident|codex"
+$env:SENTINEL_MCP_TOKEN = "snt_sua_chave_real_aqui"
 codex mcp add sentinel --url http://localhost:5000/mcp --bearer-token-env-var SENTINEL_MCP_TOKEN
 ```
 
-No Windows/VS Code (ou quando a extensão não herda variáveis do terminal), prefira declarar o header explícito em `~/.codex/config.toml` (`%USERPROFILE%\.codex\config.toml`):
+No Windows/VS Code (ou quando a extensão não herda variáveis do terminal), declare o header explícito em `~/.codex/config.toml` (`%USERPROFILE%\.codex\config.toml`):
 ```toml
 [mcp_servers.sentinel]
 url = "http://localhost:5000/mcp"
 
 [mcp_servers.sentinel.http_headers]
-Authorization = "Bearer mock:agent-dev-1|read:memory,write:decision,write:incident|codex"
+Authorization = "Bearer snt_sua_chave_real_aqui"
 ```
 
-Ou via **STDIO** no `~/.codex/config.toml` (sem depender de porta HTTP):
+Ou via **STDIO** no `~/.codex/config.toml` (sem depender de porta HTTP — lembre-se de informar `--token` com sua chave `snt_...` ou configurar `SENTINEL_MCP_TOKEN`):
 ```toml
 [mcp_servers.sentinel]
 command = "dotnet"
-args = ["run", "--no-build", "--no-launch-profile", "--project", "./src/Sentinel.Api", "--", "--stdio", "--token", "mock:agent-dev-1|read:memory,write:decision,write:incident|codex"]
+args = ["run", "--no-build", "--no-launch-profile", "--project", "./src/Sentinel.Api", "--", "--stdio", "--token", "snt_sua_chave_real_aqui"]
 
 [mcp_servers.sentinel.env]
 ASPNETCORE_ENVIRONMENT = "Development"
@@ -247,7 +247,7 @@ ASPNETCORE_ENVIRONMENT = "Development"
 ### Claude Code
 
 ```bash
-claude mcp add --transport http sentinel http://localhost:5000/mcp --header "Authorization: Bearer <token>"
+claude mcp add --transport http sentinel http://localhost:5000/mcp --header "Authorization: Bearer snt_sua_chave_real_aqui"
 ```
 
 ### Cursor
@@ -260,7 +260,7 @@ Em `.cursor/mcp.json`:
     "sentinel": {
       "url": "http://localhost:5000/mcp",
       "headers": {
-        "Authorization": "Bearer <token>"
+        "Authorization": "Bearer snt_sua_chave_real_aqui"
       }
     }
   }
@@ -269,8 +269,8 @@ Em `.cursor/mcp.json`:
 
 ### Gemini CLI e VS Code Copilot
 
-- **Gemini CLI** (`~/.gemini/settings.json`): configure `httpUrl: "http://localhost:5000/mcp"` e `headers.Authorization`.
-- **VS Code** (`.vscode/mcp.json`): configure `type: "http"`, `url: "http://localhost:5000/mcp"` e `headers.Authorization` com `input` seguro.
+- **Gemini CLI** (`~/.gemini/settings.json`): configure `httpUrl: "http://localhost:5000/mcp"` e `headers.Authorization` com `Bearer snt_sua_chave_real_aqui`.
+- **VS Code** (`.vscode/mcp.json`): configure `type: "http"`, `url: "http://localhost:5000/mcp"` e `headers.Authorization` usando `input` seguro para a chave `snt_...`.
 
 Exemplos completos e diagnóstico em [docs/guides/conectando-agentes-mcp.md](docs/guides/conectando-agentes-mcp.md).
 
@@ -284,9 +284,9 @@ Pré-requisitos: .NET 9 SDK (ou .NET 10 com roll-forward); Docker (para o compos
 
 > **Ambiente:** em uso direto via `dotnet run` sem perfil de launch (`--no-launch-profile`) ou binário publicado, o ambiente padrão do ASP.NET Core é **Production**, que exige PostgreSQL (`ConnectionStrings:Database`). No repositório há `src/Sentinel.Api/Properties/launchSettings.json` definindo `ASPNETCORE_ENVIRONMENT=Development` e `http://localhost:5000`, mas exportar a variável explicitamente garante previsibilidade em qualquer shell.
 
-### Opção 1: InMemory (Development)
+### Opção 1: Modo Local Persistido (Development)
 
-`appsettings.Development.json` já habilita: armazenamento InMemory com dados de demonstração, tokens mock (`Sentinel:AllowMockTokens`) e login de desenvolvimento (`Sentinel:Web:EnableDevLogin`).
+`appsettings.Development.json` habilita armazenamento local persistido em `data/sentinel-local.json` (`Sentinel:LocalDataFile`), **sem dados mock** (`SeedDemoData: false`), **sem tokens mock** (`AllowMockTokens: false`) e **sem login de demonstração** (`EnableDevLogin: false`). Seus workspaces, projetos, contas locais, chaves de API e eventos permanecem salvos entre reinícios.
 
 ```bash
 # bash
@@ -299,28 +299,26 @@ $env:ASPNETCORE_ENVIRONMENT = "Development"
 dotnet run --project src/Sentinel.Api
 ```
 
-A API escuta em `http://localhost:5000`. Os dados somem ao encerrar o processo.
+A API escuta em `http://localhost:5000`:
 
-- Landing: `http://localhost:5000/`
-- Revisão: `http://localhost:5000/review` → redireciona para `/auth/login`. Informe o sujeito `maintainer-alice` (Maintainer). Também existem `reader-bob` (Reader) e `agent-dev-1` (Contributor) no workspace de demonstração.
-- Agente (token mock): `mock:agent-dev-1|read:memory,write:decision,write:incident|meu-cliente`.
+- **Landing**: `http://localhost:5000/`
+- **Configuração inicial (`/auth/setup`)**: na primeira visita a `http://localhost:5000/review`, como não há workspaces cadastrados, você cria o primeiro administrador local (senha com hash PBKDF2-SHA256), o primeiro workspace e o primeiro projeto reais.
+- **Chave de API real (`snt_...`)**: após entrar em `/review`, abra **Conectar IAs (MCP)** na barra lateral para gerar sua chave de agente por workspace e copiar o trecho pronto para Codex, Claude Code, Cursor, Gemini CLI ou VS Code.
 
-Formato do token mock: `mock:sujeito|escopo1,escopo2|clientId|emissor`. Campos após o sujeito são opcionais (sem escopos, todos são concedidos; emissor padrão `https://auth.sentinel.dev`, o mesmo das fixtures). O papel vem do vínculo do sujeito no workspace, não do token.
-
-Smoke test:
+Smoke test (após gerar sua chave `snt_...`):
 
 ```bash
 curl http://localhost:5000/healthz
 curl -X POST http://localhost:5000/mcp \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer mock:agent-dev-1|read:memory|smoke" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1.0"}}}'
+  -H "Authorization: Bearer snt_sua_chave_real_aqui" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"1.0"}}}'
 ```
 
 ### Opção 2: Docker Compose com PostgreSQL
 
 ```bash
-cp .env.example .env          # defina POSTGRES_PASSWORD e SENTINEL_APP_DB_PASSWORD
+cp .env.example .env          # defina POSTGRES_PASSWORD, SENTINEL_APP_DB_PASSWORD e ADMIN_API_KEY
 docker compose up -d --build
 curl http://localhost:5000/readyz
 ```
@@ -334,8 +332,7 @@ Serviços:
 | `sentinel-api` | API conectada como `sentinel_app_login` (sujeita a RLS). Sobe só depois que `sentinel-migrate` termina com sucesso. |
 
 - As portas ficam presas em `127.0.0.1` (5000 e 5432).
-- `ASPNETCORE_ENVIRONMENT` padrão no compose é `Development` (tokens mock e login de desenvolvimento ativos). Altere no `.env` para outros cenários.
-- O banco sobe **vazio** (sem workspaces). Para carregar os dados de demonstração:
+- O banco sobe **vazio** e **sem mocks**. Acesse `/review` para completar `/auth/setup` (informando a `ADMIN_API_KEY` em Production) ou provisione via `POST /api/admin/workspaces`. Se quiser carregar fixtures de demonstração explicitamente:
 
 ```bash
 docker compose exec -T postgres psql -U postgres -d sentinel_mcp -v ON_ERROR_STOP=1 < db/fixtures/001_seed_demo.sql
@@ -351,9 +348,9 @@ Sempre separe os argumentos da aplicação com `--` no `dotnet run`. Na imagem D
 | Comando | Efeito |
 | --- | --- |
 | `dotnet run --project src/Sentinel.Api -- --migrate` | Só com `Sentinel:StorageProvider=PostgreSQL`. Aplica migrações pendentes de `db/migrations` com a conexão admin, sob lock consultivo; se aplicou a `003`, reconstrói as projeções. Depois **sai**. |
-| `dotnet run --project src/Sentinel.Api -- --seed-demo` | InMemory: popula os dados de demonstração e mantém a API no ar. PostgreSQL: aplica `db/fixtures` com a conexão admin, reconstrói projeções e **sai** com código `0`. |
+| `dotnet run --project src/Sentinel.Api -- --seed-demo` | Só quando solicitado explicitamente: no modo local popula fixtures em memória e sobe a API; no PostgreSQL aplica `db/fixtures`, reconstrói projeções e **sai** com código `0`. |
 | `dotnet run --project src/Sentinel.Api -- --rebuild-projections [--workspace-id <uuid>]` | Reconstrói as projeções a partir dos eventos (todos os workspaces ou um) e **sai**. Usa `ConnectionStrings:Database`. |
-| `dotnet run --no-build --no-launch-profile --project src/Sentinel.Api -- --stdio [--token <valor>]` | Executa o servidor MCP via entrada/saída padrão (STDIO) usando o SDK oficial; logs vão para `stderr` (`--no-launch-profile` evita ruído no `stdout`). Ideal para `codex` e clientes CLI locais. |
+| `dotnet run --no-build --no-launch-profile --project src/Sentinel.Api -- --stdio --token <chave_snt_ou_jwt>` | Executa o servidor MCP via entrada/saída padrão (STDIO) usando o SDK oficial; logs vão para `stderr` (`--no-launch-profile` evita ruído no `stdout`). Exige `--token` ou `SENTINEL_MCP_TOKEN`. |
 
 `Sentinel:AutoMigrate=true` migra na subida da API, mas exige que o processo da API tenha a conexão admin; não é recomendado em produção. Para automações administrativas existem os endpoints autenticados em `/api/admin/*`.
 
@@ -366,16 +363,18 @@ Nenhuma connection string, senha, client secret ou chave fica nos `appsettings*.
 | Chave | Padrão | Descrição |
 | --- | --- | --- |
 | `Sentinel:StorageProvider` | `InMemory` (`PostgreSQL` em `appsettings.Production.json`) | `InMemory` ou `PostgreSQL`. |
+| `Sentinel:LocalDataFile` | vazio (`data/sentinel-local.json` em Development) | Arquivo JSON atômico para persistência local no provedor `InMemory` (reconstruído via redutores na inicialização). |
 | `Sentinel:AllowInMemoryInProduction` | `false` | Permite InMemory em Production (não recomendado). |
-| `Sentinel:SeedDemoData` | `false` (`true` em Development) | Popula dados de demonstração no InMemory. |
+| `Sentinel:SeedDemoData` | `false` (`false` em Development) | Popula fixtures apenas quando ativado explicitamente ou via `--seed-demo`. |
 | `ConnectionStrings:Database` | — | Login de **menor privilégio** (membro de `sentinel_app`, sem superusuário/BYPASSRLS). Obrigatória com PostgreSQL, inclusive para `--migrate`. |
 | `ConnectionStrings:DatabaseAdmin` | usa `Database` | Conexão para DDL, migrações e fixtures. |
 | `Sentinel:AutoMigrate` | `false` | Migra ao iniciar a API. |
 | `Sentinel:Database:AllowPrivilegedRole` | `false` | Em Production, permite iniciar mesmo se o login da API ignora RLS (não recomendado). |
-| `Sentinel:AllowMockTokens` | `false` (`true` em Development) | Aceita tokens `mock:`. Sempre ignorado em Production. |
-| `Sentinel:Web:EnableDevLogin` | `false` (`true` em Development) | Formulário de login de desenvolvimento. Sempre ignorado em Production. |
-| `Sentinel:Web:DevLoginIssuer` | `https://auth.sentinel.dev` | Emissor atribuído às sessões do login de desenvolvimento. |
-| `Sentinel:ApiKeys` | `[]` | Chaves de API de agentes (ver abaixo). |
+| `Sentinel:AdminApiKey` / `ADMIN_API_KEY` | vazio | Chave administrativa para `/api/admin/workspaces` (e exigida em `/auth/setup` quando em Production). |
+| `Sentinel:AllowMockTokens` | `false` (`false` em Development) | Aceita tokens `mock:` apenas se habilitado explicitamente em testes fora de Production. |
+| `Sentinel:Web:EnableDevLogin` | `false` (`false` em Development) | Modo legado de login sem senha apenas para suítes de teste (sempre ignorado em Production). |
+| `Sentinel:Web:DevLoginIssuer` | `https://auth.sentinel.dev` | Emissor reservado ao modo de teste legado quando habilitado. |
+| `Sentinel:ApiKeys` | `[]` | Chaves de API estáticas em configuração (além das chaves dinâmicas `snt_...` criadas via console/API). |
 | `Sentinel:Mcp:AllowedOrigins` | `[]` | Origens aceitas no cabeçalho `Origin` do `/mcp`, além da própria. |
 | `Authentication:Mcp:Authority` | vazio | Emissor dos JWT de agentes. Vazio desabilita JWT e o endpoint `/.well-known/oauth-protected-resource`. |
 | `Authentication:Mcp:Audience` | `sentinel-mcp` | Audiência exigida no JWT. |
@@ -384,26 +383,24 @@ Nenhuma connection string, senha, client secret ou chave fica nos `appsettings*.
 | `Sentinel:RateLimit:McpPerMinute` / `WebPerMinute` / `LoginPerMinute` | `300` / `120` / `20` | Limites por janela de 1 minuto. |
 | `Sentinel:Retention:Enabled` / `ReceiptRetentionDays` / `IntervalMinutes` | `true` / `30` / `360` | Job que expurga `command_receipts` e `context_receipts` antigos. |
 
-### Chaves de API de agentes
+### Chaves de API de agentes (`snt_...` dinâmicas e estáticas)
 
-Só o hash SHA-256 (hexadecimal) da chave fica na configuração; a chave em si é entregue ao agente. A comparação é feita em tempo constante.
+O método recomendado é gerar chaves diretamente no console `/review` (**Conectar IAs (MCP)**) ou via `POST /api/admin/workspaces/{workspaceId}/api-keys`: o Sentinel cria uma chave CSPRNG com prefixo `snt_`, garante o vínculo ativo no workspace e armazena apenas o hash SHA-256 em banco/arquivo local (`agent_api_keys`). O segredo em claro é mostrado uma única vez e pode ser revogado a qualquer momento.
 
-Gerar uma chave e o hash no **PowerShell 7+**:
+Também é possível declarar chaves estáticas em `Sentinel:ApiKeys` via variáveis de ambiente (comparadas em tempo constante pelo hash SHA-256):
 
 ```powershell
-$chave = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+$chave = "snt_" + [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
 $hash  = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($chave))).ToLowerInvariant()
 $hash   # vai para a configuração; guarde $chave no cofre e entregue ao agente
 ```
 
-No **bash**:
-
 ```bash
-CHAVE=$(openssl rand -hex 32)
+CHAVE="snt_$(openssl rand -hex 32)"
 printf '%s' "$CHAVE" | sha256sum | cut -d' ' -f1   # hash para a configuração
 ```
 
-Configuração (por variáveis de ambiente, uma entrada por índice):
+Configuração estática (por variáveis de ambiente, uma entrada por índice):
 
 ```bash
 Sentinel__ApiKeys__0__Nome=agente-ci
@@ -425,9 +422,9 @@ Sentinel__ApiKeys__0__Scopes__1=write:incident
 
 Toda requisição com `id` exige `Authorization: Bearer`. Sem credencial válida a resposta é **401** com `WWW-Authenticate` (inclui `resource_metadata` quando JWT está configurado). Ordem de verificação:
 
-1. **Chave de API** de `Sentinel:ApiKeys` (hash SHA-256, comparação em tempo constante).
-2. **Token mock** `mock:...`, aceito somente com `Sentinel:AllowMockTokens=true` e ambiente diferente de Production.
-3. **JWT**, quando `Authentication:Mcp:Authority` está configurado: valida emissor, audiência, assinatura e expiração. Escopos vêm das claims `scope`/`scp`; a identidade é `iss` + `sub`; `client_id`/`azp` são registrados como cliente.
+1. **Chave de API** dinâmica por workspace (`snt_...` armazenada por hash SHA-256 em `agent_api_keys`) ou estática em `Sentinel:ApiKeys` (comparação em tempo constante).
+2. **JWT**, quando `Authentication:Mcp:Authority` está configurado: valida emissor, audiência, assinatura e expiração. Escopos vêm das claims `scope`/`scp`; a identidade é `iss` + `sub`; `client_id`/`azp` são registrados como cliente.
+3. **Token mock** `mock:...`, desabilitado por padrão (inclusive em Development) e aceito somente quando `Sentinel:AllowMockTokens=true` em testes automatizados fora de Production.
 
 Escopos: `read:memory`, `write:decision`, `write:incident`. O **papel** (Reader, Contributor, Maintainer) vem do vínculo em `memberships`, não do token. Sem vínculo no workspace: `NOT_FOUND`. Papel ou escopo insuficiente: `FORBIDDEN`.
 
@@ -436,21 +433,23 @@ O servidor atua apenas como *resource server*: expõe `/.well-known/oauth-protec
 ### Endpoint `/mcp`
 
 - Modo sem sessão: só `POST`. `GET` e `DELETE` retornam **405**.
-- Versões suportadas: `2025-06-18`, `2025-03-26`, `2024-11-05`. No `initialize`, a versão pedida é ecoada se suportada; senão, o servidor oferece a mais recente. Cabeçalho `MCP-Protocol-Version` não suportado retorna 400.
+- Versões suportadas: `2025-11-25`, `2025-06-18`, `2025-03-26`, `2024-11-05`. No `initialize`, a versão pedida é ecoada se suportada; senão, o servidor oferece a mais recente. Cabeçalho `MCP-Protocol-Version` não suportado retorna 400.
 - Notificações (sem `id`) recebem **202** sem corpo. Lotes JSON-RPC não são suportados.
 - Cabeçalho `Origin`, quando presente, precisa ser a própria origem ou constar em `Sentinel:Mcp:AllowedOrigins`; senão **403**.
 
-### Revisão humana (`/review`)
+### Revisão humana (`/review`) e Onboarding (`/auth/setup`)
 
-- `GET /review` (e `/app`) exige sessão web (cookie `sentinel_session`, HttpOnly, 8 h com renovação); sem sessão redireciona para `/auth/login`.
-- Login: OIDC (authorization code + PKCE, `Authentication:Web:*`, callback `/auth/callback`) ou, fora de Production com `Sentinel:Web:EnableDevLogin=true`, o formulário de desenvolvimento (`GET /auth/login` → `POST /auth/dev-login`). Sem nenhum dos dois, `/auth/login` responde 503. Logout: `POST /auth/logout`.
-- Dados: `GET /api/review/state?workspaceId=` mostra apenas workspaces em que a identidade tem vínculo ativo.
+- `GET /review` (e `/app`) exige sessão web autenticada (cookie `sentinel_session`, HttpOnly, 8 h com renovação). Se ainda não existir nenhum workspace no sistema, redireciona para **`/auth/setup`** para cadastrar o administrador local (hash PBKDF2-SHA256, 210 mil iterações), o primeiro workspace e o primeiro projeto; caso já exista, redireciona para `/auth/login`.
+- Login: autenticação local real (`GET /auth/login` → `POST /auth/login` com usuário/e-mail e senha PBKDF2-SHA256) e/ou OIDC (authorization code + PKCE, `Authentication:Web:*`, callback `/auth/callback`). Logout: `POST /auth/logout`.
+- Dados: `GET /api/review/state?workspaceId=` mostra apenas workspaces em que a identidade tem vínculo ativo (mais o bloco `sistema` com status de armazenamento e OIDC).
 - Ações: `POST /api/review/approve`, `/reject` e `/restore` exigem cookie, cabeçalho `X-CSRF-Token` (antiforgery do ASP.NET Core) e papel Maintainer. Qualquer cabeçalho `Authorization` nessas rotas resulta em **403**. Rejeição exige motivo (1 a 1000 caracteres), gravado no evento. Restaurar cria uma nova proposta a partir de uma versão anterior, que ainda precisa ser aprovada.
+- Exclusões destrutivas (remover projeto sem histórico, revogar chave de API ou remover vínculo) exigem confirmação explícita por digitação do identificador alvo no diálogo modal.
 
 ### Banco de dados
 
-- Cada operação roda numa transação com `set_config('app.current_workspace_id', ..., true)`.
+- Cada operação roda numa transação com `set_config('app.current_workspace_id', ..., true)` (e `app.current_key_hash` na validação de chaves de API).
 - A migração `003` aplica `FORCE ROW LEVEL SECURITY`, cria o papel `sentinel_app` (NOLOGIN, sem BYPASSRLS) com GRANTs mínimos, torna `memory_events`/`memory_payloads` append-only por trigger e troca as FKs de eventos/payloads para `ON DELETE RESTRICT`.
+- A migração `005` protege `memory_events.project_id` com `ON DELETE RESTRICT` e cria `local_users` e `agent_api_keys` (somente hash SHA-256) sob `FORCE ROW LEVEL SECURITY`.
 - Em Production a API recusa iniciar se o login de `ConnectionStrings:Database` for superusuário ou tiver BYPASSRLS (salvo `Sentinel:Database:AllowPrivilegedRole=true`); fora de Production, apenas registra um aviso.
 
 ### Entrada e resposta
@@ -514,7 +513,7 @@ Implementados em `tests/Sentinel.IntegrationTests/CriteriosDeAceite.cs`. O resul
 │   ├── Sentinel.Core/
 │   │   ├── CasosDeUso/        # ServicoDeMemoria: camada única de casos de uso
 │   │   ├── Comandos/          # Comandos de escrita
-│   │   ├── Comum/             # Relógio e utilitários
+│   │   ├── Comum/             # Relógio, hash PBKDF2-SHA256 e gerador snt_ (SegurancaLocal)
 │   │   ├── Consultas/         # Modelos de consulta e resultado
 │   │   ├── Contratos/         # Interfaces de repositório (IRepositorios.cs)
 │   │   ├── Excecoes/          # Exceções de domínio com códigos de erro estáveis
@@ -523,23 +522,23 @@ Implementados em `tests/Sentinel.IntegrationTests/CriteriosDeAceite.cs`. O resul
 │   │   └── Validacao/         # ValidadorDeInvariantes
 │   ├── Sentinel.Persistence/
 │   │   ├── Comum/             # Ajudante de idempotência (hash de argumentos)
-│   │   ├── EmMemoria/         # Repositório em memória (dev/testes)
+│   │   ├── EmMemoria/         # Repositório local em memória + persistência JSON atômica
 │   │   └── PostgreSql/        # Repositório Npgsql e migrador
 │   └── Sentinel.Api/
-│       ├── Admin/             # API REST /api/admin/* para gestão de workspaces, projetos e vínculos
-│       ├── Auth/              # Identidade de agentes (chave de API, mock, JWT) e escopos
+│       ├── Admin/             # API REST /api/admin/* para workspaces, projetos, chaves snt_ e usuários
+│       ├── Auth/              # Identidade de agentes (chaves SHA-256 snt_/estáticas, JWT e mock só em testes)
 │       ├── Mcp/               # Endpoint /mcp (JSON-RPC e ModelContextProtocol), dispatcher e schemas das tools
 │       ├── Operacao/          # Diagnósticos OpenTelemetry e job de retenção
-│       ├── WebReview/         # Página e API de revisão humana
+│       ├── WebReview/         # Onboarding (/auth/setup), login local/OIDC e revisão humana (/review)
 │       ├── wwwroot/           # Landing, CSS e JS (sem script inline)
 │       └── Program.cs         # Composição, CLI, autenticação e pipeline HTTP
 ├── tests/
 │   ├── Sentinel.UnitTests/
 │   ├── Sentinel.ContractTests/
-│   └── Sentinel.IntegrationTests/
+│   └── Sentinel.IntegrationTests/ # Inclui FluxoSemMocksTests, AdminApiTests e AC-01..AC-08
 ├── db/
-│   ├── migrations/            # 001 schema, 002 RLS, 003 segurança/busca/integridade, 004 grants admin
-│   ├── fixtures/              # Dados de demonstração idempotentes
+│   ├── migrations/            # 001..004 + 005 local_users, agent_api_keys e ON DELETE RESTRICT em eventos
+│   ├── fixtures/              # Dados opcionais de demonstração para --seed-demo / Testcontainers
 │   └── docker/                # Script de criação do papel/login no compose
 ├── docs/
 │   ├── adr/                   # Decisões de arquitetura
@@ -554,21 +553,21 @@ Implementados em `tests/Sentinel.IntegrationTests/CriteriosDeAceite.cs`. O resul
 
 ### Página de revisão (`/review`) e Landing (`/`)
 
-O console web em `/review` (`src/Sentinel.Api/WebReview/review.html` + `wwwroot/js/`) oferece uma experiência completa de governança humana:
-- **Visão Geral e KPIs**: métricas ao vivo e chips copiáveis para `workspaceId` e `projectId`.
+O console web em `/review` (`src/Sentinel.Api/WebReview/review.html` + `wwwroot/js/`) começa sem dados fictícios pelo onboarding `/auth/setup` e oferece governança humana completa:
+- **Navegação Clara e Controles de Fechamento**: barra lateral colapsável e retrátil (`Menu` / `×`), Inspetor em gaveta responsiva com botão `× Fechar`, barra `← Voltar` / `Visão Geral` nos detalhes e visão inicial explicativa do fluxo em 4 etapas.
 - **Fila de Revisão com Diff Lado a Lado**: comparação direta entre a **Decisão Vigente** e a **Proposta Pendente** (título, resumo, justificativa, chaves técnicas e evidências HTTPS).
 - **Catálogo de Decisões, Histórico e Restauração**: filtros por projeto e busca instantânea, histórico de versões (`GET /api/review/timeline`) e botão de restauração (`POST /api/review/restore`) para propor reversão segura.
 - **Incidentes e Eventos Append-Only**: filtro por tipo de evento e inspeção cronológica.
-- **Hub de Integração MCP e Auditor de Recibos**: geração pronta de configuração para **OpenAI Codex**, Claude Code, Cursor, Gemini CLI e VS Code Copilot, além de verificação de integridade SHA-256 (`GET /api/review/receipt`).
-- **Administração do Workspace**: criação de projetos e gestão de vínculos/papéis diretamente na interface (via `/api/admin/*` protegido por sessão de `Maintainer` + CSRF).
+- **Hub de Integração MCP e Auditor de Recibos**: geração direta de chaves reais `snt_...` por workspace (mostradas uma vez) com blocos prontos para **OpenAI Codex**, Claude Code, Cursor, Gemini CLI e VS Code Copilot, além de verificação SHA-256 (`GET /api/review/receipt`).
+- **Administração Protegida por Confirmação**: criação e exclusão de projetos (bloqueada quando há histórico imutável), usuários locais (PBKDF2-SHA256) e vínculos, exigindo digitação exata do identificador alvo antes de confirmar qualquer remoção ou revogação.
 
-Os scripts e folhas de estilo são servidos de `wwwroot/js/` e `wwwroot/css/`, com CSP estrita (`script-src 'self'`), paleta de comandos (`Ctrl+K` / `⌘K`) e tema claro/escuro.
+Os scripts e folhas de estilo são servidos de `wwwroot/js/` e `wwwroot/css/`, com CSP estrita (`script-src 'self'`), paleta de comandos (`Ctrl+K` / `⌘K` com botão `×`) e tema claro/escuro.
 
 ---
 
 ## Recursos Administrativos e Observabilidade
 
-- **API de Administração (`/api/admin/*`)**: Gestão de workspaces, projetos e vínculos (`GET/POST /api/admin/workspaces`, `GET /api/admin/workspaces/{id}`, `GET/POST /api/admin/workspaces/{id}/projects`, `GET/POST/DELETE /api/admin/workspaces/{id}/memberships`). Criação de workspace exige `X-Admin-Key` / `ADMIN_API_KEY`; gestão interna aceita `X-Admin-Key` ou sessão web de `Maintainer` com CSRF.
+- **API de Administração (`/api/admin/*`)**: Gestão de workspaces, projetos (`GET/POST/DELETE .../projects`), chaves de API (`GET/POST/DELETE .../api-keys`), usuários locais (`GET/POST .../users`) e vínculos (`GET/POST/DELETE .../memberships`). Criação de workspace exige `X-Admin-Key` / `ADMIN_API_KEY`; gestão interna aceita `X-Admin-Key` ou sessão web de `Maintainer` com CSRF.
 - **OpenTelemetry**: Tracing distribuído e métricas integradas para ASP.NET Core, HttpClient, Runtime e contadores de chamadas/erros de tools MCP (`sentinel_mcp_tool_calls_total`, `sentinel_mcp_tool_errors_total`). Exportação OTLP via `OTEL_EXPORTER_OTLP_ENDPOINT` ou `Sentinel:OpenTelemetry:OtlpEndpoint`.
 - **SDK MCP, STDIO e Schemas**: Integração com `ModelContextProtocol.AspNetCore` (`/mcp/sse` e `--stdio`), endpoint stateless `POST /mcp`, negociação de versões `2025-11-25` a `2024-11-05`, `outputSchema`, `annotations`, `resources/*` e `prompts/*`.
 - **Segurança de Conteúdo (CSP)**: CSP estrita aplicada globalmente a todas as páginas HTML servidas, sem exceções de scripts inline ou bibliotecas de terceiros via CDN.

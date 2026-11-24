@@ -115,45 +115,46 @@
                     <span class="preview-dot preview-dot-y"></span>
                     <span class="preview-dot preview-dot-g"></span>
                 </div>
-                <div class="preview-caption">Sentinel Console &mdash; Engenharia Central / Pagamentos e Cobrança</div>
+                <div class="preview-caption">Sentinel Console &mdash; Workspace / Projeto</div>
                 <div class="preview-caption">RLS + Event Sourced</div>
             </div>
             <div class="preview-shell">
                 <div class="preview-sidebar">
-                    <div class="preview-nav-group">Espaço de Trabalho</div>
-                    <div class="preview-nav-item active">Revisões de Arquitetura</div>
+                    <div class="preview-nav-group">1. Entender &amp; Começar</div>
+                    <div class="preview-nav-item active">Visão Geral</div>
+                    <div class="preview-nav-group" style="margin-top:0.8rem;">2. Governança</div>
+                    <div class="preview-nav-item">Revisões Pendentes</div>
                     <div class="preview-nav-item">Decisões Vigentes</div>
                     <div class="preview-nav-item">Incidentes</div>
-                    <div class="preview-nav-item">Visão Geral</div>
-                    <div class="preview-nav-group" style="margin-top:1rem;">Auditoria &amp; MCP</div>
+                    <div class="preview-nav-group" style="margin-top:0.8rem;">3. IAs &amp; Admin</div>
                     <div class="preview-nav-item">Linha do Tempo</div>
-                    <div class="preview-nav-item">Conectar Agentes MCP</div>
-                    <div class="preview-nav-item">Administração</div>
+                    <div class="preview-nav-item">Conectar IAs (MCP)</div>
+                    <div class="preview-nav-item">Projetos &amp; Chaves</div>
                 </div>
                 <div class="preview-list">
                     <div class="preview-card selected">
-                        <div class="preview-card-meta"><span>payment-circuit-breaker</span><span>v1 &bull; proposed</span></div>
-                        <div class="preview-card-title">Circuit Breaker Distribuído para Gateways</div>
-                        <div class="preview-card-sub">Isolar falhas em cascata abrindo circuito após 5 timeouts...</div>
+                        <div class="preview-card-meta"><span>topic-slug-pendente</span><span>v1 &bull; proposed</span></div>
+                        <div class="preview-card-title">Proposta submetida pelo agente via MCP</div>
+                        <div class="preview-card-sub">Aguardando comparação com versão vigente e aprovação humana...</div>
                     </div>
                     <div class="preview-card">
-                        <div class="preview-card-meta"><span>payment-idempotency</span><span>v2 &bull; active</span></div>
-                        <div class="preview-card-title">Idempotência Obrigatória para Cobranças</div>
-                        <div class="preview-card-sub">Usar chave de idempotência por tentativa lógica de cobrança...</div>
+                        <div class="preview-card-meta"><span>topic-slug-ativo</span><span>v2 &bull; active</span></div>
+                        <div class="preview-card-title">Decisão arquitetural consolidada</div>
+                        <div class="preview-card-sub">Consultada por agentes com emissão de comprovante SHA-256...</div>
                     </div>
                 </div>
                 <div class="preview-detail">
                     <div>
-                        <span class="status-pill active-state">&#9679; Decisão Vigente Ativa</span>
-                        <h2>Idempotência Obrigatória para Cobranças</h2>
+                        <span class="status-pill active-state">&#9679; Fluxo de Governança</span>
+                        <h2>Agente propõe. Pessoa aprova.</h2>
                         <p>
-                            Toda criação de cobrança deve exigir uma chave de idempotência com persistência transacional e trava consultiva,
-                            impedindo cobranças duplicadas em retentativas de webhook e timeouts externos.
+                            Cadastre seu workspace na primeira execução, gere chaves de API (<code>snt_...</code> com hash SHA-256)
+                            para conectar seu Codex, Claude ou Cursor, e revise todas as propostas com trilha imutável no console <code>/review</code>.
                         </p>
                         <div class="preview-note">
-                            <div class="preview-note-title">Provenance &amp; Integridade</div>
+                            <div class="preview-note-title">Sem dados fictícios</div>
                             <div class="preview-card-sub">
-                                Aprovado por <strong>maintainer-alice</strong> &bull; Proposto por <strong>agent-dev-1</strong> &bull; Comprovante verificável SHA-256 ativo.
+                                Ao abrir <strong>/review</strong> pela primeira vez, você cria sua organização real, seu usuário administrador e suas próprias chaves MCP.
                             </div>
                         </div>
                     </div>
@@ -258,8 +259,8 @@
         <div class="quickstart-box">
             <div class="quickstart-header">
                 <div>
-                    <h3>Conecte qualquer modelo de IA em segundos</h3>
-                    <p>Compatível com OpenAI Codex, Claude Code, Cursor, Gemini CLI e VS Code via Streamable HTTP ou STDIO.</p>
+                    <h3>Conecte qualquer modelo de IA com chaves reais (SHA-256)</h3>
+                    <p>Gere uma chave <code>snt_...</code> em <strong>/review &rarr; Conectar IAs (MCP)</strong> e use no OpenAI Codex, Claude Code, Cursor, Gemini CLI ou VS Code.</p>
                 </div>
                 <a href="/review" class="btn-landing-primary">Abrir Console</a>
             </div>
@@ -278,15 +279,15 @@
                         <span>~/.codex/config.toml &amp; Codex CLI</span>
                         <button type="button" class="landing-copy-btn" data-copy-target="code-codex">Copiar</button>
                     </div>
-                    <pre id="code-codex" class="landing-code-pre"># 1) Via Codex CLI (variável de ambiente SENTINEL_MCP_TOKEN):
+                    <pre id="code-codex" class="landing-code-pre"># 1) Via Codex CLI (exporte SENTINEL_MCP_TOKEN com sua chave snt_...):
 codex mcp add sentinel --url http://localhost:5000/mcp --bearer-token-env-var SENTINEL_MCP_TOKEN
 
-# 2) Ou direto em ~/.codex/config.toml (ideal para extensão VS Code no Windows):
+# 2) Ou direto em ~/.codex/config.toml (recomendado no Windows para extensão VS Code):
 [mcp_servers.sentinel]
 url = "http://localhost:5000/mcp"
 
 [mcp_servers.sentinel.http_headers]
-Authorization = "Bearer mock:agent-dev-1|read:memory,write:decision,write:incident|codex"</pre>
+Authorization = "Bearer &lt;SUA_CHAVE_API_SENTINEL&gt;"</pre>
                 </div>
             </div>
 
@@ -297,7 +298,7 @@ Authorization = "Bearer mock:agent-dev-1|read:memory,write:decision,write:incide
                         <button type="button" class="landing-copy-btn" data-copy-target="code-claude">Copiar</button>
                     </div>
                     <pre id="code-claude" class="landing-code-pre">claude mcp add --transport http sentinel http://localhost:5000/mcp \
-  --header "Authorization: Bearer mock:agent-dev-1|read:memory,write:decision,write:incident|claude-code"</pre>
+  --header "Authorization: Bearer &lt;SUA_CHAVE_API_SENTINEL&gt;"</pre>
                 </div>
             </div>
 
@@ -312,7 +313,7 @@ Authorization = "Bearer mock:agent-dev-1|read:memory,write:decision,write:incide
     "sentinel": {
       "url": "http://localhost:5000/mcp",
       "headers": {
-        "Authorization": "Bearer mock:agent-dev-1|read:memory,write:decision,write:incident|cursor"
+        "Authorization": "Bearer &lt;SUA_CHAVE_API_SENTINEL&gt;"
       }
     }
   }
@@ -331,7 +332,7 @@ Authorization = "Bearer mock:agent-dev-1|read:memory,write:decision,write:incide
     "sentinel": {
       "httpUrl": "http://localhost:5000/mcp",
       "headers": {
-        "Authorization": "Bearer mock:agent-dev-1|read:memory,write:decision,write:incident|gemini-cli"
+        "Authorization": "Bearer &lt;SUA_CHAVE_API_SENTINEL&gt;"
       }
     }
   }
@@ -351,7 +352,7 @@ Authorization = "Bearer mock:agent-dev-1|read:memory,write:decision,write:incide
       "type": "http",
       "url": "http://localhost:5000/mcp",
       "headers": {
-        "Authorization": "Bearer mock:agent-dev-1|read:memory,write:decision,write:incident|vscode"
+        "Authorization": "Bearer &lt;SUA_CHAVE_API_SENTINEL&gt;"
       }
     }
   }

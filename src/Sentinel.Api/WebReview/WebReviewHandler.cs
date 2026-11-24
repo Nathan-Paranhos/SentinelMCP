@@ -104,35 +104,265 @@ public sealed class WebReviewHandler
             return;
         }
 
-        if (!LoginDevPermitido(_config, _ambiente))
+        if (LoginDevPermitido(_config, _ambiente))
         {
-            contexto.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
-            await contexto.Response.WriteAsync("Login web não configurado. Defina Authentication:Web (OIDC).");
-            return;
-        }
-
-        var tokens = _antiforgery.GetAndStoreTokens(contexto);
-        var enc = HtmlEncoder.Default;
-        contexto.Response.ContentType = "text/html; charset=utf-8";
-        contexto.Response.Headers.CacheControl = "no-store";
-        await contexto.Response.WriteAsync($@"<!DOCTYPE html>
-<html lang=""pt-BR"">
+            var tokensDev = _antiforgery.GetAndStoreTokens(contexto);
+            var encDev = HtmlEncoder.Default;
+            contexto.Response.ContentType = "text/html; charset=utf-8";
+            contexto.Response.Headers.CacheControl = "no-store";
+            await contexto.Response.WriteAsync($@"<!DOCTYPE html>
+<html lang=""pt-BR"" data-theme=""dark"">
 <head>
 <meta charset=""UTF-8""><meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
-<title>Sentinel — Login de desenvolvimento</title>
-<link rel=""stylesheet"" href=""/css/tokens.css""><link rel=""stylesheet"" href=""/css/components.css"">
+<title>Sentinel-MCP — Acesso Web de Teste</title>
+<link rel=""icon"" href=""/sentinel-verde.svg"" type=""image/svg+xml"">
+<link rel=""stylesheet"" href=""/css/tokens.css""><link rel=""stylesheet"" href=""/css/components.css""><link rel=""stylesheet"" href=""/css/views.css"">
+<script src=""/js/theme-boot.js""></script>
 </head>
-<body style=""font-family:var(--font-sans,system-ui);display:flex;min-height:100vh;align-items:center;justify-content:center;background:var(--bg-window,#0b1008);color:var(--text-primary,#eee);"">
-<form method=""post"" action=""/auth/dev-login"" style=""display:flex;flex-direction:column;gap:12px;min-width:320px;padding:2rem;border:1px solid var(--border-subtle,#333);border-radius:12px;"">
-  <h1 style=""font-size:1.2rem;margin:0;"">Login de desenvolvimento</h1>
-  <p style=""font-size:0.85rem;margin:0;opacity:.8;"">Disponível apenas fora de Production. Em ambientes reais o login é feito pelo provedor OIDC.</p>
-  <label>Sujeito (sub)<br><input name=""subject"" required maxlength=""200"" value=""maintainer-alice"" style=""width:100%;""></label>
-  <input type=""hidden"" name=""{enc.Encode(tokens.FormFieldName)}"" value=""{enc.Encode(tokens.RequestToken ?? string.Empty)}"">
-  <input type=""hidden"" name=""returnUrl"" value=""{enc.Encode(retorno)}"">
+<body class=""auth-shell"">
+<form method=""post"" action=""/auth/dev-login"" class=""auth-card"">
+  <div class=""auth-brand""><img src=""/sentinel-verde.svg"" alt=""Sentinel""><span>Sentinel-MCP</span></div>
+  <h1 class=""auth-title"">Acesso Rápido (Modo Teste)</h1>
+  <p class=""auth-desc"">Habilitado apenas via Sentinel:Web:EnableDevLogin em suítes de teste.</p>
+  <label class=""form-field""><span>Sujeito (sub)</span><input class=""form-input"" name=""subject"" required maxlength=""200""></label>
+  <input type=""hidden"" name=""{encDev.Encode(tokensDev.FormFieldName)}"" value=""{encDev.Encode(tokensDev.RequestToken ?? string.Empty)}"">
+  <input type=""hidden"" name=""returnUrl"" value=""{encDev.Encode(retorno)}"">
   <button type=""submit"" class=""btn-macos btn-macos-primary"">Entrar</button>
 </form>
 </body>
 </html>");
+            return;
+        }
+
+        if (await _servico.ConfiguracaoInicialPendenteAsync(contexto.RequestAborted))
+        {
+            contexto.Response.Redirect("/auth/setup?returnUrl=" + Uri.EscapeDataString(retorno));
+            return;
+        }
+
+        var erroMsg = contexto.Request.Query["erro"].ToString() == "1"
+            ? "Usuário ou senha inválidos."
+            : null;
+        await RenderFormularioLoginLocalAsync(contexto, retorno, erroMsg);
+    }
+
+    private static string BotaoOlhoSenha(string inputId) =>
+        $@"<button type=""button"" class=""password-toggle-btn"" data-toggle-password=""{inputId}"" aria-label=""Mostrar senha"" title=""Mostrar senha"" aria-pressed=""false""><svg width=""15"" height=""15"" viewBox=""0 0 24 24"" fill=""none"" stroke=""currentColor"" stroke-width=""1.8"" stroke-linecap=""round"" stroke-linejoin=""round""><path d=""M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z""/><circle cx=""12"" cy=""12"" r=""3""/></svg></button>";
+
+    private async Task RenderFormularioLoginLocalAsync(HttpContext contexto, string retorno, string? erro)
+    {
+        var tokens = _antiforgery.GetAndStoreTokens(contexto);
+        var enc = HtmlEncoder.Default;
+        var blocoErro = string.IsNullOrWhiteSpace(erro)
+            ? string.Empty
+            : $@"<div class=""review-permission-notice"" role=""alert"">{enc.Encode(erro)}</div>";
+
+        contexto.Response.ContentType = "text/html; charset=utf-8";
+        contexto.Response.Headers.CacheControl = "no-store";
+        await contexto.Response.WriteAsync($@"<!DOCTYPE html>
+<html lang=""pt-BR"" data-theme=""dark"">
+<head>
+<meta charset=""UTF-8""><meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
+<title>Sentinel-MCP — Entrar no Console</title>
+<link rel=""icon"" href=""/sentinel-verde.svg"" type=""image/svg+xml"">
+<link rel=""stylesheet"" href=""/css/tokens.css""><link rel=""stylesheet"" href=""/css/components.css""><link rel=""stylesheet"" href=""/css/views.css"">
+<script src=""/js/theme-boot.js""></script>
+<script src=""/js/auth-setup.js"" defer></script>
+</head>
+<body class=""auth-shell"">
+<form method=""post"" action=""/auth/login"" class=""auth-card"">
+  <div class=""auth-brand""><img src=""/sentinel-verde.svg"" alt=""Sentinel""><span>Sentinel-MCP</span></div>
+  <h1 class=""auth-title"">Entrar no Console de Governança</h1>
+  <p class=""auth-desc"">Autentique-se com sua conta cadastrada para revisar propostas, decisões, incidentes e chaves MCP.</p>
+  {blocoErro}
+  <label class=""form-field""><span>Usuário</span><input class=""form-input"" name=""username"" required maxlength=""80"" autocomplete=""username"" placeholder=""seu.usuario""></label>
+  <label class=""form-field"" for=""login-password""><span>Senha</span><div class=""password-input-wrap""><input id=""login-password"" class=""form-input"" name=""password"" type=""password"" required maxlength=""128"" autocomplete=""current-password"">{BotaoOlhoSenha("login-password")}</div></label>
+  <input type=""hidden"" name=""{enc.Encode(tokens.FormFieldName)}"" value=""{enc.Encode(tokens.RequestToken ?? string.Empty)}"">
+  <input type=""hidden"" name=""returnUrl"" value=""{enc.Encode(retorno)}"">
+  <div class=""auth-actions"">
+    <a href=""/"" class=""btn-macos btn-macos-secondary"">Voltar</a>
+    <button type=""submit"" class=""btn-macos btn-macos-primary"">Entrar</button>
+  </div>
+</form>
+</body>
+</html>");
+    }
+
+    public async Task HandleLocalLoginAsync(HttpContext contexto)
+    {
+        if (OidcConfigurado(_config))
+        {
+            contexto.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        if (!await AntiforgeryValidoAsync(contexto))
+        {
+            contexto.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await contexto.Response.WriteAsync("Token CSRF inválido.");
+            return;
+        }
+
+        var formulario = await contexto.Request.ReadFormAsync(contexto.RequestAborted);
+        var usuarioNome = formulario["username"].ToString();
+        var senha = formulario["password"].ToString();
+        var retorno = UrlLocal(formulario["returnUrl"]) ?? "/review";
+
+        try
+        {
+            var usuario = await _servico.AutenticarUsuarioLocalAsync(usuarioNome, senha, contexto.RequestAborted);
+            var identidade = new ClaimsIdentity(
+                [new Claim("sub", usuario.Sujeito), new Claim("iss", usuario.Emissor), new Claim("name", usuario.NomeExibicao ?? usuario.Sujeito)],
+                EsquemasDeAutenticacao.CookieWeb, "name", "role");
+            await contexto.SignInAsync(EsquemasDeAutenticacao.CookieWeb, new ClaimsPrincipal(identidade));
+            _log.LogInformation("Login web realizado para {Sujeito}", usuario.Sujeito);
+            contexto.Response.Redirect(retorno);
+        }
+        catch (ExcecaoDeNaoAutorizado)
+        {
+            contexto.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await RenderFormularioLoginLocalAsync(contexto, retorno, "Usuário ou senha inválidos.");
+        }
+    }
+
+    public async Task RenderSetupAsync(HttpContext contexto)
+    {
+        if (OidcConfigurado(_config) || !await _servico.ConfiguracaoInicialPendenteAsync(contexto.RequestAborted))
+        {
+            contexto.Response.Redirect("/auth/login");
+            return;
+        }
+
+        var retorno = UrlLocal(contexto.Request.Query["returnUrl"]) ?? "/review";
+        await RenderFormularioSetupAsync(contexto, retorno, null);
+    }
+
+    private async Task RenderFormularioSetupAsync(HttpContext contexto, string retorno, string? erro, IFormCollection? valores = null)
+    {
+        var tokens = _antiforgery.GetAndStoreTokens(contexto);
+        var enc = HtmlEncoder.Default;
+        var exigirAdminKey = _ambiente.IsProduction() && !string.IsNullOrWhiteSpace(_config["Sentinel:AdminApiKey"] ?? Environment.GetEnvironmentVariable("ADMIN_API_KEY"));
+        var blocoErro = string.IsNullOrWhiteSpace(erro)
+            ? string.Empty
+            : $@"<div class=""review-permission-notice"" role=""alert"">{enc.Encode(erro)}</div>";
+        var campoAdminKey = exigirAdminKey
+            ? $@"<label class=""form-field"" for=""setup-admin-key""><span>Chave de Administração (ADMIN_API_KEY)</span><div class=""password-input-wrap""><input id=""setup-admin-key"" class=""form-input"" name=""adminKey"" type=""password"" required>{BotaoOlhoSenha("setup-admin-key")}</div></label>"
+            : string.Empty;
+
+        string Valor(string campo) => enc.Encode(valores?[campo].ToString() ?? string.Empty);
+
+        contexto.Response.ContentType = "text/html; charset=utf-8";
+        contexto.Response.Headers.CacheControl = "no-store";
+        await contexto.Response.WriteAsync($@"<!DOCTYPE html>
+<html lang=""pt-BR"" data-theme=""dark"">
+<head>
+<meta charset=""UTF-8""><meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
+<title>Sentinel-MCP — Configuração Inicial</title>
+<link rel=""icon"" href=""/sentinel-verde.svg"" type=""image/svg+xml"">
+<link rel=""stylesheet"" href=""/css/tokens.css""><link rel=""stylesheet"" href=""/css/components.css""><link rel=""stylesheet"" href=""/css/views.css"">
+<script src=""/js/theme-boot.js""></script>
+<script src=""/js/auth-setup.js"" defer></script>
+</head>
+<body class=""auth-shell"">
+<form method=""post"" action=""/auth/setup"" class=""auth-card auth-card-wide"">
+  <div class=""auth-brand""><img src=""/sentinel-verde.svg"" alt=""Sentinel""><span>Sentinel-MCP</span></div>
+  <h1 class=""auth-title"">Configuração Inicial do Workspace</h1>
+  <p class=""auth-desc"">Ambiente limpo e sem dados fictícios. Crie seu primeiro espaço de trabalho, projeto inicial e usuário administrador (Maintainer).</p>
+  {blocoErro}
+  <div class=""form-grid"">
+    <label class=""form-field""><span>Nome do Workspace</span><input id=""setup-ws-name"" class=""form-input"" name=""workspaceName"" value=""{Valor("workspaceName")}"" required maxlength=""120"" placeholder=""Ex.: Engenharia da Empresa""></label>
+    <label class=""form-field""><span>Slug do Workspace</span><input id=""setup-ws-slug"" class=""form-input"" name=""workspaceSlug"" value=""{Valor("workspaceSlug")}"" required maxlength=""80"" placeholder=""engenharia-empresa""></label>
+  </div>
+  <div class=""form-grid"">
+    <label class=""form-field""><span>Primeiro Projeto</span><input id=""setup-proj-name"" class=""form-input"" name=""projectName"" value=""{Valor("projectName")}"" required maxlength=""120"" placeholder=""Ex.: Plataforma Core""></label>
+    <label class=""form-field""><span>Slug do Projeto</span><input id=""setup-proj-slug"" class=""form-input"" name=""projectSlug"" value=""{Valor("projectSlug")}"" required maxlength=""80"" placeholder=""plataforma-core""></label>
+  </div>
+  <div class=""form-grid"">
+    <label class=""form-field""><span>Usuário Administrador</span><input class=""form-input"" name=""username"" value=""{Valor("username")}"" required maxlength=""80"" autocomplete=""username"" placeholder=""seu.usuario""></label>
+    <label class=""form-field""><span>Nome de Exibição</span><input class=""form-input"" name=""displayName"" value=""{Valor("displayName")}"" maxlength=""120"" placeholder=""Seu Nome""></label>
+  </div>
+  <div class=""form-grid"">
+    <label class=""form-field"" for=""setup-password""><span>Senha (mínimo 8 caracteres)</span><div class=""password-input-wrap""><input id=""setup-password"" class=""form-input"" name=""password"" type=""password"" required minlength=""8"" maxlength=""128"" autocomplete=""new-password"">{BotaoOlhoSenha("setup-password")}</div></label>
+    <label class=""form-field"" for=""setup-confirm-password""><span>Confirmar Senha</span><div class=""password-input-wrap""><input id=""setup-confirm-password"" class=""form-input"" name=""confirmPassword"" type=""password"" required minlength=""8"" maxlength=""128"" autocomplete=""new-password"">{BotaoOlhoSenha("setup-confirm-password")}</div></label>
+  </div>
+  <div id=""setup-password-match"" class=""password-match-hint"" aria-live=""polite""></div>
+  {campoAdminKey}
+  <input type=""hidden"" name=""{enc.Encode(tokens.FormFieldName)}"" value=""{enc.Encode(tokens.RequestToken ?? string.Empty)}"">
+  <input type=""hidden"" name=""returnUrl"" value=""{enc.Encode(retorno)}"">
+  <div class=""auth-actions"">
+    <a href=""/"" class=""btn-macos btn-macos-secondary"">Voltar</a>
+    <button type=""submit"" class=""btn-macos btn-macos-primary"">Criar Workspace e Entrar</button>
+  </div>
+</form>
+</body>
+</html>");
+    }
+
+    public async Task HandleSetupAsync(HttpContext contexto)
+    {
+        if (OidcConfigurado(_config))
+        {
+            contexto.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
+
+        if (!await AntiforgeryValidoAsync(contexto))
+        {
+            contexto.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await contexto.Response.WriteAsync("Token CSRF inválido.");
+            return;
+        }
+
+        var formulario = await contexto.Request.ReadFormAsync(contexto.RequestAborted);
+        var retorno = UrlLocal(formulario["returnUrl"]) ?? "/review";
+
+        var chaveConfigurada = _config["Sentinel:AdminApiKey"] ?? Environment.GetEnvironmentVariable("ADMIN_API_KEY");
+        if (_ambiente.IsProduction() && !string.IsNullOrWhiteSpace(chaveConfigurada))
+        {
+            var recebida = formulario["adminKey"].ToString();
+            if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+                    System.Text.Encoding.UTF8.GetBytes(recebida),
+                    System.Text.Encoding.UTF8.GetBytes(chaveConfigurada)))
+            {
+                contexto.Response.StatusCode = StatusCodes.Status403Forbidden;
+                await RenderFormularioSetupAsync(contexto, retorno, "ADMIN_API_KEY inválida para configuração inicial em Production.", formulario);
+                return;
+            }
+        }
+
+        var senha = formulario["password"].ToString();
+        var confirmacao = formulario["confirmPassword"].ToString();
+        if (!string.Equals(senha, confirmacao, StringComparison.Ordinal))
+        {
+            contexto.Response.StatusCode = StatusCodes.Status400BadRequest;
+            await RenderFormularioSetupAsync(contexto, retorno, "As senhas informadas não conferem.", formulario);
+            return;
+        }
+
+        var emissorLocal = _config["Sentinel:Web:LocalIssuer"] ?? "https://auth.sentinel.dev";
+        try
+        {
+            var r = await _servico.ExecutarConfiguracaoInicialAsync(new EntradaConfiguracaoInicial(
+                formulario["workspaceName"].ToString(),
+                formulario["workspaceSlug"].ToString(),
+                formulario["projectName"].ToString(),
+                formulario["projectSlug"].ToString(),
+                formulario["username"].ToString(),
+                formulario["displayName"].ToString(),
+                senha), emissorLocal, contexto.RequestAborted);
+
+            var identidade = new ClaimsIdentity(
+                [new Claim("sub", r.Usuario.Sujeito), new Claim("iss", r.Usuario.Emissor), new Claim("name", r.Usuario.NomeExibicao ?? r.Usuario.Sujeito)],
+                EsquemasDeAutenticacao.CookieWeb, "name", "role");
+            await contexto.SignInAsync(EsquemasDeAutenticacao.CookieWeb, new ClaimsPrincipal(identidade));
+            _log.LogInformation("Configuração inicial concluída: workspace {WorkspaceId}, administrador {Sujeito}", r.EspacoTrabalho.EspacoTrabalhoId, r.Usuario.Sujeito);
+            contexto.Response.Redirect(retorno);
+        }
+        catch (ExcecaoDeDominio ex)
+        {
+            contexto.Response.StatusCode = ex is ExcecaoDeConflito ? StatusCodes.Status409Conflict : StatusCodes.Status400BadRequest;
+            await RenderFormularioSetupAsync(contexto, retorno, ex.Message, formulario);
+        }
     }
 
     public async Task HandleDevLoginAsync(HttpContext contexto)
@@ -195,6 +425,13 @@ public sealed class WebReviewHandler
 
         return new
         {
+            sistema = new
+            {
+                armazenamento = _config["Sentinel:StorageProvider"] ?? "InMemory",
+                autenticacaoWeb = OidcConfigurado(_config) ? "OIDC PKCE" : (LoginDevPermitido(_config, _ambiente) ? "Dev" : "Local PBKDF2"),
+                tokensMockPermitidos = ServicoIdentidadeAgente.MockPermitido(_config, _ambiente),
+                ambiente = _ambiente.EnvironmentName
+            },
             usuario = new
             {
                 sujeito = ator.Sujeito,

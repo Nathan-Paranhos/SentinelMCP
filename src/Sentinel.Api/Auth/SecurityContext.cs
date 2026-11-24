@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Sentinel.Core.CasosDeUso;
+using Sentinel.Core.Comum;
+using Sentinel.Core.Contratos;
 using Sentinel.Core.Excecoes;
 
 namespace Sentinel.Api.Auth;
@@ -53,13 +55,19 @@ public sealed class ServicoIdentidadeAgente : IServicoIdentidadeAgente
     private readonly IConfiguration _config;
     private readonly IHostEnvironment _ambiente;
     private readonly ILogger<ServicoIdentidadeAgente> _log;
+    private readonly IRepositorioChavesApi? _chavesApi;
     private readonly List<(byte[] Hash, ConfiguracaoChaveApi Config)> _chaves;
 
-    public ServicoIdentidadeAgente(IConfiguration config, IHostEnvironment ambiente, ILogger<ServicoIdentidadeAgente> log)
+    public ServicoIdentidadeAgente(
+        IConfiguration config,
+        IHostEnvironment ambiente,
+        ILogger<ServicoIdentidadeAgente> log,
+        IRepositorioChavesApi? chavesApi = null)
     {
         _config = config;
         _ambiente = ambiente;
         _log = log;
+        _chavesApi = chavesApi;
         _chaves = (config.GetSection("Sentinel:ApiKeys").Get<List<ConfiguracaoChaveApi>>() ?? [])
             .Where(k => !string.IsNullOrWhiteSpace(k.KeySha256) && !string.IsNullOrWhiteSpace(k.Subject) && !string.IsNullOrWhiteSpace(k.Issuer))
             .Select(k => (Convert.FromHexString(k.KeySha256.Trim()), k))
@@ -90,7 +98,7 @@ public sealed class ServicoIdentidadeAgente : IServicoIdentidadeAgente
 
         token = token.Trim();
 
-        // Autenticação por chave de API
+        // Autenticação por chave de API estática (configuração)
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(token));
         foreach (var (hashConfigurado, chave) in _chaves)
         {
@@ -99,6 +107,20 @@ public sealed class ServicoIdentidadeAgente : IServicoIdentidadeAgente
                 return new IdentidadeAgente(
                     new Ator(chave.Issuer, chave.Subject, chave.ClientId, CanalDeAcesso.Mcp),
                     chave.Scopes.ToHashSet(StringComparer.Ordinal), "api-key");
+            }
+        }
+
+        // Autenticação por chave de API persistida no workspace
+        if (_chavesApi != null)
+        {
+            var hashHex = Convert.ToHexString(hash).ToLowerInvariant();
+            var registrada = await _chavesApi.ObterChaveApiPorHashAsync(hashHex);
+            if (registrada != null && registrada.Ativo && (!registrada.ExpiraEm.HasValue || registrada.ExpiraEm.Value > Relogio.AgoraUtc()))
+            {
+                await _chavesApi.RegistrarUsoChaveApiAsync(registrada.EspacoTrabalhoId, registrada.ChaveId, Relogio.AgoraUtc());
+                return new IdentidadeAgente(
+                    new Ator(registrada.Emissor, registrada.Sujeito, registrada.ClienteId ?? "api-key", CanalDeAcesso.Mcp),
+                    registrada.Escopos.ToHashSet(StringComparer.Ordinal), "api-key");
             }
         }
 

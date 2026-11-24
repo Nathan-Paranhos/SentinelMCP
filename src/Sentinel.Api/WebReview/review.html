@@ -14,25 +14,38 @@
 </head>
 <body>
     <div class="app-viewport">
-        <main class="macos-window">
-            <aside class="macos-sidebar" id="macos-sidebar">
+        <main class="macos-window" id="app-window">
+            <div id="drawer-backdrop" class="drawer-backdrop" aria-hidden="true"></div>
+
+            <aside class="macos-sidebar" id="macos-sidebar" aria-label="Menu Lateral de Navegação">
                 <div class="sidebar-top">
                     <div class="sidebar-header">
-                        <div class="sidebar-brand-mark">
-                            <img src="/sentinel-verde.svg" alt="Sentinel">
+                        <div class="sidebar-brand-group">
+                            <div class="sidebar-brand-mark">
+                                <img src="/sentinel-verde.svg" alt="Sentinel">
+                            </div>
+                            <div class="sidebar-brand-text">
+                                <span class="sidebar-brand-title">Sentinel-MCP</span>
+                                <span class="sidebar-brand-badge">Governança v0.2.0</span>
+                            </div>
                         </div>
-                        <div class="sidebar-brand-text">
-                            <span class="sidebar-brand-title">Sentinel-MCP</span>
-                            <span class="sidebar-brand-badge">Governança v0.2.0</span>
-                        </div>
+                        <button id="sidebar-close-btn" type="button" class="panel-close-btn" title="Fechar menu lateral" aria-label="Fechar menu lateral">&times;</button>
                     </div>
 
                     <div class="sidebar-nav-scroll">
-                        <div class="nav-group-title">Espaço de Trabalho</div>
-                        <div class="nav-item active" data-view-nav="reviews" role="button" tabindex="0">
+                        <div class="nav-group-title">1. Entender &amp; Começar</div>
+                        <div class="nav-item active" data-view-nav="overview" role="button" tabindex="0">
+                            <div class="nav-item-content">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1.5"/><rect width="7" height="5" x="14" y="3" rx="1.5"/><rect width="7" height="9" x="14" y="12" rx="1.5"/><rect width="7" height="5" x="3" y="16" rx="1.5"/></svg>
+                                <span>Visão Geral</span>
+                            </div>
+                        </div>
+
+                        <div class="nav-group-title nav-group-spaced">2. Governança Humana</div>
+                        <div class="nav-item" data-view-nav="reviews" role="button" tabindex="0">
                             <div class="nav-item-content">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><path d="m9 15 2 2 4-4"/></svg>
-                                <span>Revisões</span>
+                                <span>Revisões Pendentes</span>
                             </div>
                             <span class="nav-item-count" id="count-reviews">0</span>
                         </div>
@@ -50,14 +63,8 @@
                             </div>
                             <span class="nav-item-count" id="count-incidents">0</span>
                         </div>
-                        <div class="nav-item" data-view-nav="overview" role="button" tabindex="0">
-                            <div class="nav-item-content">
-                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="7" height="9" x="3" y="3" rx="1.5"/><rect width="7" height="5" x="14" y="3" rx="1.5"/><rect width="7" height="9" x="14" y="12" rx="1.5"/><rect width="7" height="5" x="3" y="16" rx="1.5"/></svg>
-                                <span>Visão Geral</span>
-                            </div>
-                        </div>
 
-                        <div class="nav-group-title nav-group-spaced">Auditoria &amp; MCP</div>
+                        <div class="nav-group-title nav-group-spaced">3. Auditoria &amp; IAs (MCP)</div>
                         <div class="nav-item" data-view-nav="timeline" role="button" tabindex="0">
                             <div class="nav-item-content">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
@@ -67,15 +74,15 @@
                         <div class="nav-item" data-view-nav="mcp" role="button" tabindex="0">
                             <div class="nav-item-content">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m9 9 3 3-3 3"/><path d="M15 15h.01"/></svg>
-                                <span>Conectar Agentes MCP</span>
+                                <span>Conectar IAs (MCP)</span>
                             </div>
                         </div>
 
-                        <div class="nav-group-title nav-group-spaced">Sistema</div>
+                        <div class="nav-group-title nav-group-spaced">4. Administração</div>
                         <div class="nav-item" data-view-nav="admin" role="button" tabindex="0">
                             <div class="nav-item-content">
                                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-                                <span>Administração</span>
+                                <span>Projetos, Chaves &amp; Acesso</span>
                             </div>
                         </div>
                         <div class="nav-item" data-view-nav="settings" role="button" tabindex="0">
@@ -105,10 +112,11 @@
             <section class="macos-main">
                 <header class="macos-toolbar">
                     <div class="toolbar-left">
-                        <button id="sidebar-toggle-btn" type="button" class="toolbar-icon-btn active" title="Alternar Barra Lateral">
-                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/></svg>
+                        <button id="sidebar-toggle-btn" type="button" class="toolbar-toggle-btn active" title="Abrir ou recolher Menu Lateral" aria-expanded="true">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                            <span>Menu</span>
                         </button>
-                        <span class="toolbar-title" id="toolbar-view-title">Revisões de Arquitetura</span>
+                        <span class="toolbar-title" id="toolbar-view-title">Visão Geral</span>
                     </div>
                     <div class="toolbar-right">
                         <div class="toolbar-user" id="toolbar-user" title="Usuário autenticado na sessão web">
@@ -116,17 +124,18 @@
                             <span class="toolbar-user-name" id="user-subject">&mdash;</span>
                             <span class="toolbar-user-role" id="user-role"></span>
                         </div>
-                        <button id="refresh-state-btn" type="button" class="toolbar-icon-btn" data-action="refresh-state" title="Atualizar dados do servidor">
+                        <button id="refresh-state-btn" type="button" class="toolbar-icon-btn" data-action="refresh-state" title="Atualizar dados do servidor" aria-label="Atualizar dados">
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
                         </button>
-                        <button id="toolbar-search-trigger" type="button" class="toolbar-search-btn">
+                        <button id="toolbar-search-trigger" type="button" class="toolbar-search-btn" title="Busca rápida">
                             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                             <span>Buscar</span>
                             <kbd class="toolbar-search-kbd">&#8984;K</kbd>
                         </button>
-                        <button id="theme-toggle-btn" type="button" class="toolbar-icon-btn" title="Alternar Tema"></button>
-                        <button id="inspector-toggle-btn" type="button" class="toolbar-icon-btn active" title="Alternar Painel Inspetor">
-                            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>
+                        <button id="theme-toggle-btn" type="button" class="toolbar-icon-btn" title="Alternar Tema" aria-label="Alternar Tema"></button>
+                        <button id="inspector-toggle-btn" type="button" class="toolbar-toggle-btn active" title="Abrir ou fechar Inspetor Técnico" aria-expanded="true">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 3v18"/></svg>
+                            <span class="hide-on-xs">Inspetor</span>
                         </button>
                         <button id="logout-btn" type="button" class="toolbar-text-btn" data-action="logout" title="Encerrar sessão">Sair</button>
                     </div>
@@ -137,16 +146,16 @@
                 </div>
             </section>
 
-            <aside class="macos-inspector" id="macos-inspector"></aside>
+            <aside class="macos-inspector" id="macos-inspector" aria-label="Inspetor Técnico Lateral"></aside>
         </main>
     </div>
 
-    <div id="command-palette" class="command-palette-backdrop">
+    <div id="command-palette" class="command-palette-backdrop" role="dialog" aria-modal="true" aria-label="Busca rápida">
         <div class="command-palette-box">
             <div class="command-search-wrap">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:var(--text-tertiary);"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
                 <input id="command-search-input" class="command-search-input" type="text" placeholder="Buscar decisões, propostas, incidentes ou comandos..." autocomplete="off">
-                <span class="command-esc-badge">ESC</span>
+                <button id="command-close-btn" type="button" class="panel-close-btn" title="Fechar busca" aria-label="Fechar busca">&times;</button>
             </div>
             <div id="command-results" class="command-results-scroll"></div>
             <div class="command-footer">
@@ -155,21 +164,32 @@
                     <span><kbd>&crarr;</kbd> selecionar</span>
                     <span><kbd>esc</kbd> fechar</span>
                 </div>
-                <span>Spotlight Sentinel-MCP</span>
+                <span>Busca Sentinel-MCP</span>
             </div>
         </div>
     </div>
 
-    <div id="modal-dialog" class="modal-dialog-backdrop">
+    <div id="modal-dialog" class="modal-dialog-backdrop" role="dialog" aria-modal="true" aria-labelledby="modal-title">
         <div class="modal-dialog-box">
-            <div>
+            <div class="modal-dialog-header">
                 <h3 id="modal-title" class="modal-dialog-title">Confirmar Operação</h3>
-                <p id="modal-desc" class="modal-dialog-desc">Deseja prosseguir com a governança?</p>
+                <button id="modal-close-x" type="button" class="panel-close-btn" title="Fechar janela" aria-label="Fechar modal">&times;</button>
             </div>
+            <p id="modal-desc" class="modal-dialog-desc">Deseja prosseguir com a operação?</p>
+
             <div id="modal-input-wrap" class="modal-dialog-input-wrap">
                 <textarea id="modal-reason-input" class="modal-dialog-textarea" maxlength="1000" aria-describedby="modal-reason-hint" placeholder="Descreva a justificativa técnica para rejeição da proposta..."></textarea>
                 <div id="modal-reason-hint" class="modal-reason-hint" aria-live="polite">0/1000</div>
             </div>
+
+            <div id="modal-confirm-phrase-wrap" class="modal-confirm-phrase-wrap">
+                <div class="modal-danger-banner">Confirmação obrigatória para evitar exclusão acidental.</div>
+                <label class="form-field" for="modal-confirm-input">
+                    <span>Digite <strong id="modal-confirm-expected" class="mono-tag"></strong> para confirmar:</span>
+                    <input id="modal-confirm-input" type="text" class="form-input" autocomplete="off" placeholder="Digite o texto exato acima">
+                </label>
+            </div>
+
             <div class="modal-dialog-actions">
                 <button id="modal-cancel-btn" type="button" class="btn-macos btn-macos-secondary">Cancelar</button>
                 <button id="modal-confirm-btn" type="button" class="btn-macos btn-macos-primary">Confirmar</button>

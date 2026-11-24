@@ -1,4 +1,5 @@
 using Sentinel.Core.Comandos;
+using Sentinel.Core.Comum;
 using Sentinel.Core.Consultas;
 using Sentinel.Core.Contratos;
 using Sentinel.Core.Excecoes;
@@ -65,27 +66,61 @@ public sealed record EntradaRestaurar(
     int VersaoEsperada,
     string? ChaveIdempotencia);
 
+public sealed record EntradaConfiguracaoInicial(
+    string? NomeWorkspace,
+    string? SlugWorkspace,
+    string? NomeProjeto,
+    string? SlugProjeto,
+    string? NomeUsuario,
+    string? NomeExibicao,
+    string? Senha);
+
+public sealed record EntradaCriarChaveApi(
+    Guid EspacoTrabalhoId,
+    string? Nome,
+    string? Sujeito,
+    string? ClienteId,
+    PapelUsuario Papel,
+    List<string>? Escopos,
+    int? DiasExpiracao);
+
+public sealed record EntradaCriarUsuarioLocal(
+    Guid EspacoTrabalhoId,
+    string? NomeUsuario,
+    string? NomeExibicao,
+    string? Senha,
+    PapelUsuario Papel);
+
 // Camada de casos de uso de governança e memória
 public sealed class ServicoDeMemoria
 {
+    private static readonly HashSet<string> EscoposValidosApi =
+        ["read:memory", "write:decision", "write:incident"];
+
     private readonly IRepositorioEspacoTrabalho _espacos;
     private readonly IRepositorioDecisao _decisoes;
     private readonly IRepositorioIncidente _incidentes;
     private readonly IRepositorioContexto _contexto;
     private readonly IRepositorioHistorico _historico;
+    private readonly IRepositorioUsuariosLocais? _usuarios;
+    private readonly IRepositorioChavesApi? _chavesApi;
 
     public ServicoDeMemoria(
         IRepositorioEspacoTrabalho espacos,
         IRepositorioDecisao decisoes,
         IRepositorioIncidente incidentes,
         IRepositorioContexto contexto,
-        IRepositorioHistorico historico)
+        IRepositorioHistorico historico,
+        IRepositorioUsuariosLocais? usuarios = null,
+        IRepositorioChavesApi? chavesApi = null)
     {
         _espacos = espacos;
         _decisoes = decisoes;
         _incidentes = incidentes;
         _contexto = contexto;
         _historico = historico;
+        _usuarios = usuarios;
+        _chavesApi = chavesApi;
     }
 
     // Valida vínculo e permissão no workspace
@@ -475,5 +510,209 @@ public sealed class ServicoDeMemoria
     {
         await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
         return await _espacos.RemoverVinculoAsync(espacoTrabalhoId, vinculoId, ct);
+    }
+
+    public async Task<bool> RemoverProjetoAsync(Ator ator, Guid espacoTrabalhoId, Guid projetoId, CancellationToken ct = default)
+    {
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
+        if (await _espacos.ObterProjetoAsync(espacoTrabalhoId, projetoId, ct) == null)
+            throw new ExcecaoDeNaoEncontrado($"Projeto {projetoId} não encontrado no workspace.");
+
+        if (await _espacos.ProjetoPossuiHistoricoAsync(espacoTrabalhoId, projetoId, ct))
+            throw new ExcecaoDeConflito("Este projeto já possui decisões, incidentes ou eventos imutáveis e não pode ser excluído.");
+
+        return await _espacos.RemoverProjetoAsync(espacoTrabalhoId, projetoId, ct);
+    }
+
+    // Configuração inicial (bootstrap sem dados mock)
+    public async Task<bool> ConfiguracaoInicialPendenteAsync(CancellationToken ct = default)
+    {
+        if (_usuarios == null)
+            return false;
+        return !await _espacos.PossuiAlgumEspacoAsync(ct) && !await _usuarios.PossuiAlgumUsuarioAsync(ct);
+    }
+
+    public async Task<ResultadoConfiguracaoInicial> ExecutarConfiguracaoInicialAsync(
+        EntradaConfiguracaoInicial e,
+        string emissorLocal,
+        CancellationToken ct = default)
+    {
+        var repoUsuarios = _usuarios ?? throw new InvalidOperationException("Repositório de usuários locais não configurado.");
+
+        if (await _espacos.PossuiAlgumEspacoAsync(ct) || await repoUsuarios.PossuiAlgumUsuarioAsync(ct))
+            throw new ExcecaoDeConflito("A configuração inicial já foi concluída neste ambiente.");
+
+        if (string.IsNullOrWhiteSpace(e.NomeWorkspace) || e.NomeWorkspace.Trim().Length > 120)
+            throw new ExcecaoDeValidacao("Nome do workspace deve ter entre 1 e 120 caracteres.");
+        ValidadorDeInvariantes.ValidarSlug(e.SlugWorkspace, "slug do workspace");
+
+        if (string.IsNullOrWhiteSpace(e.NomeProjeto) || e.NomeProjeto.Trim().Length > 120)
+            throw new ExcecaoDeValidacao("Nome do projeto deve ter entre 1 e 120 caracteres.");
+        ValidadorDeInvariantes.ValidarSlug(e.SlugProjeto, "slug do projeto");
+
+        var usuarioNorm = ValidarNomeUsuario(e.NomeUsuario);
+        ValidarSenha(e.Senha);
+
+        var espaco = await _espacos.CriarEspacoTrabalhoAsync(e.NomeWorkspace.Trim(), e.SlugWorkspace!.Trim().ToLowerInvariant(), null, ct);
+        var projeto = await _espacos.CriarProjetoAsync(espaco.EspacoTrabalhoId, e.NomeProjeto.Trim(), e.SlugProjeto!.Trim().ToLowerInvariant(), null, ct);
+        var usuario = await repoUsuarios.CriarUsuarioLocalAsync(new UsuarioLocal(
+            Guid.NewGuid(),
+            usuarioNorm,
+            emissorLocal.Trim(),
+            usuarioNorm,
+            string.IsNullOrWhiteSpace(e.NomeExibicao) ? usuarioNorm : e.NomeExibicao.Trim(),
+            SegurancaLocal.GerarHashSenha(e.Senha!),
+            true,
+            Relogio.AgoraUtc()), ct);
+
+        var vinculo = await _espacos.CriarOuAtualizarVinculoAsync(
+            espaco.EspacoTrabalhoId, usuario.Emissor, usuario.Sujeito, PapelUsuario.Mantenedor, true, ct);
+
+        return new ResultadoConfiguracaoInicial(espaco, projeto, usuario, vinculo);
+    }
+
+    public async Task<UsuarioLocal> AutenticarUsuarioLocalAsync(string? nomeUsuario, string? senha, CancellationToken ct = default)
+    {
+        var repoUsuarios = _usuarios ?? throw new ExcecaoDeNaoAutorizado("Autenticação local indisponível.");
+        if (string.IsNullOrWhiteSpace(nomeUsuario) || string.IsNullOrEmpty(senha))
+            throw new ExcecaoDeNaoAutorizado("Usuário e senha são obrigatórios.");
+
+        var usuario = await repoUsuarios.ObterPorNomeUsuarioAsync(nomeUsuario.Trim().ToLowerInvariant(), ct);
+        if (usuario == null || !usuario.Ativo || !SegurancaLocal.VerificarSenha(senha, usuario.HashSenha))
+            throw new ExcecaoDeNaoAutorizado("Usuário ou senha inválidos.");
+
+        return usuario;
+    }
+
+    public async Task<List<UsuarioLocal>> ListarUsuariosDoEspacoAsync(Ator ator, Guid espacoTrabalhoId, CancellationToken ct = default)
+    {
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
+        if (_usuarios == null) return [];
+        return await _usuarios.ListarUsuariosDoEspacoAsync(espacoTrabalhoId, ct);
+    }
+
+    public async Task<UsuarioLocal> CriarUsuarioLocalNoEspacoAsync(
+        Ator ator,
+        EntradaCriarUsuarioLocal e,
+        string emissorLocal,
+        CancellationToken ct = default)
+    {
+        await ExigirAdminSistemaOuMantenedorAsync(ator, e.EspacoTrabalhoId, ct);
+        var repoUsuarios = _usuarios ?? throw new InvalidOperationException("Repositório de usuários locais não configurado.");
+
+        var usuarioNorm = ValidarNomeUsuario(e.NomeUsuario);
+        ValidarSenha(e.Senha);
+
+        var existente = await repoUsuarios.ObterPorNomeUsuarioAsync(usuarioNorm, ct);
+        if (existente != null)
+            throw new ExcecaoDeConflito($"Usuário local '{usuarioNorm}' já existe.");
+
+        var novo = await repoUsuarios.CriarUsuarioLocalAsync(new UsuarioLocal(
+            Guid.NewGuid(),
+            usuarioNorm,
+            emissorLocal.Trim(),
+            usuarioNorm,
+            string.IsNullOrWhiteSpace(e.NomeExibicao) ? usuarioNorm : e.NomeExibicao.Trim(),
+            SegurancaLocal.GerarHashSenha(e.Senha!),
+            true,
+            Relogio.AgoraUtc()), ct);
+
+        await _espacos.CriarOuAtualizarVinculoAsync(e.EspacoTrabalhoId, novo.Emissor, novo.Sujeito, e.Papel, true, ct);
+        return novo;
+    }
+
+    // Gestão de chaves de API para clientes MCP
+    public async Task<ResultadoCriarChaveApi> CriarChaveApiAsync(
+        Ator ator,
+        EntradaCriarChaveApi e,
+        string emissorPadrao,
+        CancellationToken ct = default)
+    {
+        await ExigirAdminSistemaOuMantenedorAsync(ator, e.EspacoTrabalhoId, ct);
+        var repoChaves = _chavesApi ?? throw new InvalidOperationException("Repositório de chaves de API não configurado.");
+
+        if (string.IsNullOrWhiteSpace(e.Nome) || e.Nome.Trim().Length > 100)
+            throw new ExcecaoDeValidacao("Nome da chave deve ter entre 1 e 100 caracteres.");
+
+        if (string.IsNullOrWhiteSpace(e.Sujeito) || e.Sujeito.Trim().Length > 120)
+            throw new ExcecaoDeValidacao("Identificador do agente (subject) deve ter entre 1 e 120 caracteres.");
+
+        var escopos = (e.Escopos ?? ["read:memory", "write:decision", "write:incident"])
+            .Select(s => s.Trim())
+            .Where(s => s.Length > 0)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        if (escopos.Count == 0 || escopos.Any(s => !EscoposValidosApi.Contains(s)))
+            throw new ExcecaoDeValidacao("Escopos válidos: read:memory, write:decision, write:incident.");
+
+        if (e.DiasExpiracao.HasValue && (e.DiasExpiracao.Value < 1 || e.DiasExpiracao.Value > 365))
+            throw new ExcecaoDeValidacao("Expiração da chave deve ficar entre 1 e 365 dias.");
+
+        var sujeito = e.Sujeito.Trim();
+        var emissor = emissorPadrao.Trim();
+        var clienteId = string.IsNullOrWhiteSpace(e.ClienteId) ? null : e.ClienteId.Trim();
+        if (clienteId != null && clienteId.Length > 80)
+            throw new ExcecaoDeValidacao("ClienteId não pode exceder 80 caracteres.");
+
+        // Garante vínculo ativo para que a nova chave tenha acesso imediato ao workspace
+        var vinculoAtual = await _espacos.ObterVinculoMembroAsync(e.EspacoTrabalhoId, emissor, sujeito, ct);
+        if (vinculoAtual == null || !vinculoAtual.Ativo || !vinculoAtual.Papel.Atende(e.Papel))
+        {
+            var papelFinal = vinculoAtual != null && vinculoAtual.Papel.Atende(e.Papel) ? vinculoAtual.Papel : e.Papel;
+            await _espacos.CriarOuAtualizarVinculoAsync(e.EspacoTrabalhoId, emissor, sujeito, papelFinal, true, ct);
+        }
+
+        var (tokenPlano, prefixo, hashHex) = SegurancaLocal.GerarTokenChaveApi();
+        var agora = Relogio.AgoraUtc();
+        var expiraEm = e.DiasExpiracao.HasValue ? agora.AddDays(e.DiasExpiracao.Value) : (DateTimeOffset?)null;
+
+        var chave = await repoChaves.CriarChaveApiAsync(new ChaveApiAgente(
+            Guid.NewGuid(),
+            e.EspacoTrabalhoId,
+            e.Nome.Trim(),
+            prefixo,
+            hashHex,
+            emissor,
+            sujeito,
+            clienteId,
+            escopos,
+            true,
+            ator.Sujeito,
+            agora,
+            expiraEm,
+            null), ct);
+
+        return new ResultadoCriarChaveApi(chave, tokenPlano);
+    }
+
+    public async Task<List<ChaveApiAgente>> ListarChavesApiAsync(Ator ator, Guid espacoTrabalhoId, CancellationToken ct = default)
+    {
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
+        if (_chavesApi == null) return [];
+        return await _chavesApi.ListarChavesApiAsync(espacoTrabalhoId, ct);
+    }
+
+    public async Task<bool> RevogarChaveApiAsync(Ator ator, Guid espacoTrabalhoId, Guid chaveId, CancellationToken ct = default)
+    {
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
+        if (_chavesApi == null) return false;
+        return await _chavesApi.RevogarChaveApiAsync(espacoTrabalhoId, chaveId, ct);
+    }
+
+    private static string ValidarNomeUsuario(string? nomeUsuario)
+    {
+        if (string.IsNullOrWhiteSpace(nomeUsuario))
+            throw new ExcecaoDeValidacao("Nome de usuário é obrigatório.");
+        var limpo = nomeUsuario.Trim().ToLowerInvariant();
+        if (limpo.Length is < 3 or > 80 || limpo.Any(c => !(char.IsLetterOrDigit(c) || c is '.' or '_' or '-' or '@')))
+            throw new ExcecaoDeValidacao("Usuário deve ter 3-80 caracteres (letras, dígitos, ., _, - ou @).");
+        return limpo;
+    }
+
+    private static void ValidarSenha(string? senha)
+    {
+        if (string.IsNullOrEmpty(senha) || senha.Length < 8 || senha.Length > 128)
+            throw new ExcecaoDeValidacao("A senha deve ter entre 8 e 128 caracteres.");
     }
 }

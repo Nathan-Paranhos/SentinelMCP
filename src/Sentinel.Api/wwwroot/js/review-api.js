@@ -109,12 +109,36 @@ export function criarProjetoAdmin(workspaceId, nome, slug, csrf) {
     return enviarJson('POST', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/projects`, { name: nome, slug }, csrf);
 }
 
+export function removerProjetoAdmin(workspaceId, projectId, csrf) {
+    return enviarJson('DELETE', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}`, undefined, csrf);
+}
+
 export function configurarVinculoAdmin(workspaceId, issuer, subject, role, isActive, csrf) {
     return enviarJson('POST', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/memberships`, { issuer, subject, role, isActive }, csrf);
 }
 
 export function removerVinculoAdmin(workspaceId, membershipId, csrf) {
     return enviarJson('DELETE', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/memberships/${encodeURIComponent(membershipId)}`, undefined, csrf);
+}
+
+export function listarChavesApiAdmin(workspaceId) {
+    return buscarJson(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/api-keys`);
+}
+
+export function criarChaveApiAdmin(workspaceId, payload, csrf) {
+    return enviarJson('POST', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/api-keys`, payload, csrf);
+}
+
+export function revogarChaveApiAdmin(workspaceId, keyId, csrf) {
+    return enviarJson('DELETE', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/api-keys/${encodeURIComponent(keyId)}`, undefined, csrf);
+}
+
+export function listarUsuariosAdmin(workspaceId) {
+    return buscarJson(`/api/admin/workspaces/${encodeURIComponent(workspaceId)}/users`);
+}
+
+export function criarUsuarioAdmin(workspaceId, payload, csrf) {
+    return enviarJson('POST', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/users`, payload, csrf);
 }
 
 export async function encerrarSessao(csrf) {

@@ -11,7 +11,7 @@ using Sentinel.Persistence.Comum;
 
 namespace Sentinel.Persistence.EmMemoria;
 
-// Repositório em memória para desenvolvimento e testes
+// Repositório em memória para desenvolvimento e testes (com persistência local opcional em arquivo)
 public sealed class RepositorioSentinelEmMemoria :
     IRepositorioEspacoTrabalho,
     IRepositorioDecisao,
@@ -20,9 +20,12 @@ public sealed class RepositorioSentinelEmMemoria :
     IRepositorioHistorico,
     IReconstrutorProjecoes,
     IManutencaoRetencao,
-    IVerificadorProntidao
+    IVerificadorProntidao,
+    IRepositorioUsuariosLocais,
+    IRepositorioChavesApi
 {
     private readonly object _trava = new();
+    private readonly string? _arquivoEstado;
 
     private readonly Dictionary<Guid, EspacoTrabalho> _espacosTrabalho = new();
     private readonly Dictionary<Guid, Projeto> _projetos = new();
@@ -36,6 +39,87 @@ public sealed class RepositorioSentinelEmMemoria :
     private readonly Dictionary<Guid, IncidenteAtual> _incidentesAtuais = new();
     private readonly Dictionary<string, ReciboComando> _recibosComando = new();
     private readonly Dictionary<Guid, ReciboConsulta> _recibosConsulta = new();
+    private readonly Dictionary<string, UsuarioLocal> _usuariosLocais = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<Guid, ChaveApiAgente> _chavesApi = new();
+
+    public RepositorioSentinelEmMemoria(string? arquivoEstado = null)
+    {
+        _arquivoEstado = string.IsNullOrWhiteSpace(arquivoEstado) ? null : arquivoEstado;
+        if (_arquivoEstado != null)
+            CarregarDoDisco();
+    }
+
+    private sealed class SnapshotLocal
+    {
+        public List<EspacoTrabalho> Espacos { get; set; } = [];
+        public List<Projeto> Projetos { get; set; } = [];
+        public List<VinculoMembro> Vinculos { get; set; } = [];
+        public List<TopicoDecisao> Topicos { get; set; } = [];
+        public List<FluxoIncidente> Incidentes { get; set; } = [];
+        public List<EventoMemoria> Eventos { get; set; } = [];
+        public List<CargaMemoria> Cargas { get; set; } = [];
+        public List<ReciboComando> RecibosComando { get; set; } = [];
+        public List<ReciboConsulta> RecibosConsulta { get; set; } = [];
+        public List<UsuarioLocal> UsuariosLocais { get; set; } = [];
+        public List<ChaveApiAgente> ChavesApi { get; set; } = [];
+    }
+
+    private void CarregarDoDisco()
+    {
+        if (_arquivoEstado == null || !File.Exists(_arquivoEstado))
+            return;
+
+        var json = File.ReadAllText(_arquivoEstado);
+        var snap = JsonSerializer.Deserialize<SnapshotLocal>(json);
+        if (snap == null)
+            return;
+
+        lock (_trava)
+        {
+            foreach (var e in snap.Espacos) _espacosTrabalho[e.EspacoTrabalhoId] = e;
+            foreach (var p in snap.Projetos) _projetos[p.ProjetoId] = p;
+            foreach (var v in snap.Vinculos) _vinculosMembros[ChaveVinculo(v.EspacoTrabalhoId, v.Emissor, v.Sujeito)] = v;
+            foreach (var t in snap.Topicos) _topicosDecisao[t.TopicoId] = t;
+            foreach (var i in snap.Incidentes) _fluxosIncidentes[i.IncidenteId] = i;
+            _eventosMemoria.AddRange(snap.Eventos);
+            foreach (var c in snap.Cargas) _cargasMemoria[c.CargaId] = c;
+            foreach (var rc in snap.RecibosComando) _recibosComando[ChaveRecibo(rc.EspacoTrabalhoId, rc.PrincipalId, rc.Operacao, rc.ChaveIdempotencia)] = rc;
+            foreach (var rcs in snap.RecibosConsulta) _recibosConsulta[rcs.ConsultaId] = rcs;
+            foreach (var u in snap.UsuariosLocais) _usuariosLocais[u.NomeUsuario] = u;
+            foreach (var k in snap.ChavesApi) _chavesApi[k.ChaveId] = k;
+
+            ReconstruirSemTrava(null);
+        }
+    }
+
+    private void PersistirSemTrava()
+    {
+        if (_arquivoEstado == null)
+            return;
+
+        var dir = Path.GetDirectoryName(_arquivoEstado);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        var snap = new SnapshotLocal
+        {
+            Espacos = [.. _espacosTrabalho.Values],
+            Projetos = [.. _projetos.Values],
+            Vinculos = [.. _vinculosMembros.Values],
+            Topicos = [.. _topicosDecisao.Values],
+            Incidentes = [.. _fluxosIncidentes.Values],
+            Eventos = [.. _eventosMemoria],
+            Cargas = [.. _cargasMemoria.Values],
+            RecibosComando = [.. _recibosComando.Values],
+            RecibosConsulta = [.. _recibosConsulta.Values],
+            UsuariosLocais = [.. _usuariosLocais.Values],
+            ChavesApi = [.. _chavesApi.Values]
+        };
+
+        var tmp = _arquivoEstado + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(snap));
+        File.Move(tmp, _arquivoEstado, overwrite: true);
+    }
 
     private static string ChaveVinculo(Guid ws, string emissor, string sujeito) => $"{ws}|{emissor}|{sujeito}";
     private static string ChaveRecibo(Guid ws, string principal, string operacao, string chave) => $"{ws}|{principal}|{operacao}|{chave}";
@@ -216,6 +300,11 @@ public sealed class RepositorioSentinelEmMemoria :
         }
     }
 
+    public Task<bool> PossuiAlgumEspacoAsync(CancellationToken ct = default)
+    {
+        lock (_trava) return Task.FromResult(_espacosTrabalho.Count > 0);
+    }
+
     public Task<EspacoTrabalho> CriarEspacoTrabalhoAsync(string nome, string slug, Guid? espacoTrabalhoId = null, CancellationToken ct = default)
     {
         lock (_trava)
@@ -225,6 +314,7 @@ public sealed class RepositorioSentinelEmMemoria :
 
             var ws = new EspacoTrabalho(espacoTrabalhoId ?? Guid.NewGuid(), nome, slug, Relogio.Truncar(DateTimeOffset.UtcNow));
             _espacosTrabalho[ws.EspacoTrabalhoId] = ws;
+            PersistirSemTrava();
             return Task.FromResult(ws);
         }
     }
@@ -249,7 +339,32 @@ public sealed class RepositorioSentinelEmMemoria :
 
             var proj = new Projeto(projetoId ?? Guid.NewGuid(), espacoTrabalhoId, nome, slug, Relogio.Truncar(DateTimeOffset.UtcNow));
             _projetos[proj.ProjetoId] = proj;
+            PersistirSemTrava();
             return Task.FromResult(proj);
+        }
+    }
+
+    public Task<bool> ProjetoPossuiHistoricoAsync(Guid espacoTrabalhoId, Guid projetoId, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            var temHistorico = _topicosDecisao.Values.Any(t => t.EspacoTrabalhoId == espacoTrabalhoId && t.ProjetoId == projetoId)
+                || _fluxosIncidentes.Values.Any(f => f.EspacoTrabalhoId == espacoTrabalhoId && f.ProjetoId == projetoId)
+                || _eventosMemoria.Any(e => e.EspacoTrabalhoId == espacoTrabalhoId && e.ProjetoId == projetoId);
+            return Task.FromResult(temHistorico);
+        }
+    }
+
+    public Task<bool> RemoverProjetoAsync(Guid espacoTrabalhoId, Guid projetoId, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            if (!_projetos.TryGetValue(projetoId, out var p) || p.EspacoTrabalhoId != espacoTrabalhoId)
+                return Task.FromResult(false);
+
+            _projetos.Remove(projetoId);
+            PersistirSemTrava();
+            return Task.FromResult(true);
         }
     }
 
@@ -265,6 +380,7 @@ public sealed class RepositorioSentinelEmMemoria :
             var criadoEm = existente?.CriadoEm ?? Relogio.Truncar(DateTimeOffset.UtcNow);
             var vinculo = new VinculoMembro(id, espacoTrabalhoId, emissor, sujeito, papel, ativo, criadoEm);
             _vinculosMembros[chave] = vinculo;
+            PersistirSemTrava();
             return Task.FromResult(vinculo);
         }
     }
@@ -289,6 +405,7 @@ public sealed class RepositorioSentinelEmMemoria :
                 return Task.FromResult(false);
 
             _vinculosMembros.Remove(encontrado.Key);
+            PersistirSemTrava();
             return Task.FromResult(true);
         }
     }
@@ -399,6 +516,7 @@ public sealed class RepositorioSentinelEmMemoria :
         var agora = Relogio.AgoraUtc();
         var resultado = acao(agora);
         _recibosComando[chaveRecibo] = new ReciboComando(Guid.NewGuid(), ws, principal, operacao, chave, hash, JsonSerializer.Serialize(resultado), agora);
+        PersistirSemTrava();
         return resultado;
     }
 
@@ -682,6 +800,7 @@ public sealed class RepositorioSentinelEmMemoria :
 
             _recibosConsulta[consultaId] = new ReciboConsulta(consultaId, consulta.EspacoTrabalhoId, consulta.ProjetoId,
                 consulta.PrincipalId, consulta.PrincipalEmissor, consulta.ClienteId, "textual", agora, itensRecibo, digest);
+            PersistirSemTrava();
 
             return Task.FromResult(new ResultadoConsultaContexto(consultaId, itens.Count > 0 ? "found" : "none", "textual", itens));
         }
@@ -745,5 +864,106 @@ public sealed class RepositorioSentinelEmMemoria :
 
         foreach (var fluxo in _fluxosIncidentes.Values.Where(f => Alvo(f.EspacoTrabalhoId)).ToList())
             AtualizarProjecaoIncidente(fluxo);
+    }
+
+    // Usuários locais
+    public Task<bool> PossuiAlgumUsuarioAsync(CancellationToken ct = default)
+    {
+        lock (_trava) return Task.FromResult(_usuariosLocais.Count > 0);
+    }
+
+    public Task<UsuarioLocal?> ObterPorNomeUsuarioAsync(string nomeUsuario, CancellationToken ct = default)
+    {
+        lock (_trava) return Task.FromResult(_usuariosLocais.GetValueOrDefault(nomeUsuario.Trim().ToLowerInvariant()));
+    }
+
+    public Task<List<UsuarioLocal>> ListarUsuariosDoEspacoAsync(Guid espacoTrabalhoId, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            var vinculos = _vinculosMembros.Values
+                .Where(v => v.EspacoTrabalhoId == espacoTrabalhoId)
+                .Select(v => (v.Emissor, v.Sujeito))
+                .ToHashSet();
+
+            var lista = _usuariosLocais.Values
+                .Where(u => vinculos.Contains((u.Emissor, u.Sujeito)))
+                .OrderBy(u => u.CriadoEm)
+                .ToList();
+            return Task.FromResult(lista);
+        }
+    }
+
+    public Task<UsuarioLocal> CriarUsuarioLocalAsync(UsuarioLocal usuario, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            if (_usuariosLocais.ContainsKey(usuario.NomeUsuario))
+                throw new ExcecaoDeConflito($"Usuário local '{usuario.NomeUsuario}' já existe.");
+            _usuariosLocais[usuario.NomeUsuario] = usuario;
+            PersistirSemTrava();
+            return Task.FromResult(usuario);
+        }
+    }
+
+    // Chaves de API para agentes MCP
+    public Task<ChaveApiAgente> CriarChaveApiAsync(ChaveApiAgente chave, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            if (_chavesApi.Values.Any(k => k.HashChave == chave.HashChave))
+                throw new ExcecaoDeConflito("Conflito ao gerar hash da chave de API.");
+            _chavesApi[chave.ChaveId] = chave;
+            PersistirSemTrava();
+            return Task.FromResult(chave);
+        }
+    }
+
+    public Task<List<ChaveApiAgente>> ListarChavesApiAsync(Guid espacoTrabalhoId, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            var lista = _chavesApi.Values
+                .Where(k => k.EspacoTrabalhoId == espacoTrabalhoId)
+                .OrderByDescending(k => k.CriadoEm)
+                .ToList();
+            return Task.FromResult(lista);
+        }
+    }
+
+    public Task<ChaveApiAgente?> ObterChaveApiPorHashAsync(string hashSha256Hex, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            var encontrada = _chavesApi.Values.FirstOrDefault(k => string.Equals(k.HashChave, hashSha256Hex, StringComparison.Ordinal));
+            return Task.FromResult(encontrada);
+        }
+    }
+
+    public Task RegistrarUsoChaveApiAsync(Guid espacoTrabalhoId, Guid chaveId, DateTimeOffset usadoEm, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            if (_chavesApi.TryGetValue(chaveId, out var k) && k.EspacoTrabalhoId == espacoTrabalhoId)
+            {
+                var ultimoPersistido = k.UltimoUsoEm;
+                _chavesApi[chaveId] = k with { UltimoUsoEm = usadoEm };
+                if (!ultimoPersistido.HasValue || (usadoEm - ultimoPersistido.Value).TotalSeconds >= 60)
+                    PersistirSemTrava();
+            }
+            return Task.CompletedTask;
+        }
+    }
+
+    public Task<bool> RevogarChaveApiAsync(Guid espacoTrabalhoId, Guid chaveId, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            if (!_chavesApi.TryGetValue(chaveId, out var k) || k.EspacoTrabalhoId != espacoTrabalhoId)
+                return Task.FromResult(false);
+            _chavesApi.Remove(chaveId);
+            PersistirSemTrava();
+            return Task.FromResult(true);
+        }
     }
 }

@@ -53,11 +53,8 @@ if (ehStdio)
     await ValidarBancoInicialAsync(host.Services, hostBuilder.Configuration, hostBuilder.Environment, args, host.Services.GetRequiredService<ILoggerFactory>().CreateLogger("Sentinel.Stdio"));
 
     var tokenStdio = ObterArgumento(args, "--token") ?? Environment.GetEnvironmentVariable("SENTINEL_MCP_TOKEN");
-    if (string.IsNullOrWhiteSpace(tokenStdio) && hostBuilder.Environment.IsDevelopment())
-        tokenStdio = "mock:agent-dev-1|read:memory,write:decision,write:incident|codex-stdio";
-
     if (string.IsNullOrWhiteSpace(tokenStdio))
-        throw new InvalidOperationException("Modo --stdio exige token em SENTINEL_MCP_TOKEN ou --token <valor>.");
+        throw new InvalidOperationException("Modo --stdio exige uma chave de API ou JWT em SENTINEL_MCP_TOKEN ou --token <valor>.");
 
     var authStdio = host.Services.GetRequiredService<IServicoIdentidadeAgente>() as ServicoIdentidadeAgente
         ?? throw new InvalidOperationException("Serviço de identidade padrão indisponível no modo STDIO.");
@@ -316,13 +313,22 @@ app.MapPost("/api/admin/workspaces", (HttpContext ctx, AdminEndpointHandler h) =
 app.MapGet("/api/admin/workspaces/{workspaceId:guid}", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleGetWorkspaceAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapGet("/api/admin/workspaces/{workspaceId:guid}/projects", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleListProjectsAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapPost("/api/admin/workspaces/{workspaceId:guid}/projects", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleCreateProjectAsync(ctx, workspaceId)).RequireRateLimiting("web");
+app.MapDelete("/api/admin/workspaces/{workspaceId:guid}/projects/{projectId:guid}", (HttpContext ctx, Guid workspaceId, Guid projectId, AdminEndpointHandler h) => h.HandleDeleteProjectAsync(ctx, workspaceId, projectId)).RequireRateLimiting("web");
 app.MapGet("/api/admin/workspaces/{workspaceId:guid}/memberships", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleListMembershipsAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapPost("/api/admin/workspaces/{workspaceId:guid}/memberships", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleConfigureMembershipAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapDelete("/api/admin/workspaces/{workspaceId:guid}/memberships/{membershipId:guid}", (HttpContext ctx, Guid workspaceId, Guid membershipId, AdminEndpointHandler h) => h.HandleRemoveMembershipAsync(ctx, workspaceId, membershipId)).RequireRateLimiting("web");
+app.MapGet("/api/admin/workspaces/{workspaceId:guid}/api-keys", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleListApiKeysAsync(ctx, workspaceId)).RequireRateLimiting("web");
+app.MapPost("/api/admin/workspaces/{workspaceId:guid}/api-keys", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleCreateApiKeyAsync(ctx, workspaceId)).RequireRateLimiting("web");
+app.MapDelete("/api/admin/workspaces/{workspaceId:guid}/api-keys/{keyId:guid}", (HttpContext ctx, Guid workspaceId, Guid keyId, AdminEndpointHandler h) => h.HandleRevokeApiKeyAsync(ctx, workspaceId, keyId)).RequireRateLimiting("web");
+app.MapGet("/api/admin/workspaces/{workspaceId:guid}/users", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleListUsersAsync(ctx, workspaceId)).RequireRateLimiting("web");
+app.MapPost("/api/admin/workspaces/{workspaceId:guid}/users", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleCreateUserAsync(ctx, workspaceId)).RequireRateLimiting("web");
 
 app.MapGet("/review", (HttpContext ctx, WebReviewHandler h) => h.RenderReviewPageAsync(ctx)).RequireRateLimiting("web");
 app.MapGet("/app", (HttpContext ctx, WebReviewHandler h) => h.RenderReviewPageAsync(ctx)).RequireRateLimiting("web");
+app.MapGet("/auth/setup", (HttpContext ctx, WebReviewHandler h) => h.RenderSetupAsync(ctx)).RequireRateLimiting("login");
+app.MapPost("/auth/setup", (HttpContext ctx, WebReviewHandler h) => h.HandleSetupAsync(ctx)).RequireRateLimiting("login");
 app.MapGet("/auth/login", (HttpContext ctx, WebReviewHandler h) => h.RenderLoginAsync(ctx)).RequireRateLimiting("login");
+app.MapPost("/auth/login", (HttpContext ctx, WebReviewHandler h) => h.HandleLocalLoginAsync(ctx)).RequireRateLimiting("login");
 app.MapPost("/auth/dev-login", (HttpContext ctx, WebReviewHandler h) => h.HandleDevLoginAsync(ctx)).RequireRateLimiting("login");
 app.MapPost("/auth/logout", (HttpContext ctx, WebReviewHandler h) => h.HandleLogoutAsync(ctx)).RequireRateLimiting("web");
 app.MapGet("/api/review/state", (HttpContext ctx, WebReviewHandler h) => h.HandleStateAsync(ctx)).RequireRateLimiting("web");
@@ -356,7 +362,11 @@ static string RegistrarPersistencia(IServiceCollection services, IConfiguration 
         if (ambiente.IsProduction() && !config.GetValue<bool>("Sentinel:AllowInMemoryInProduction"))
             throw new InvalidOperationException("O armazenamento InMemory não persiste dados e não é permitido em Production. Configure Sentinel:StorageProvider=PostgreSQL.");
 
-        var repositorio = new RepositorioSentinelEmMemoria();
+        var arquivoLocal = config["Sentinel:LocalDataFile"];
+        if (!string.IsNullOrWhiteSpace(arquivoLocal) && !Path.IsPathRooted(arquivoLocal))
+            arquivoLocal = Path.Combine(ambiente.ContentRootPath, arquivoLocal);
+
+        var repositorio = new RepositorioSentinelEmMemoria(arquivoLocal);
         if (args.Contains("--seed-demo") || config.GetValue<bool>("Sentinel:SeedDemoData"))
             repositorio.PopularDadosDemonstracao();
         services.AddSingleton(repositorio);
@@ -368,7 +378,8 @@ static string RegistrarPersistencia(IServiceCollection services, IConfiguration 
 
 static void RegistrarInterfaces<T>(IServiceCollection servicos, T repositorio) where T : class,
     IRepositorioEspacoTrabalho, IRepositorioDecisao, IRepositorioIncidente, IRepositorioContexto,
-    IRepositorioHistorico, IReconstrutorProjecoes, IManutencaoRetencao, IVerificadorProntidao
+    IRepositorioHistorico, IReconstrutorProjecoes, IManutencaoRetencao, IVerificadorProntidao,
+    IRepositorioUsuariosLocais, IRepositorioChavesApi
 {
     servicos.AddSingleton<IRepositorioEspacoTrabalho>(repositorio);
     servicos.AddSingleton<IRepositorioDecisao>(repositorio);
@@ -378,6 +389,8 @@ static void RegistrarInterfaces<T>(IServiceCollection servicos, T repositorio) w
     servicos.AddSingleton<IReconstrutorProjecoes>(repositorio);
     servicos.AddSingleton<IManutencaoRetencao>(repositorio);
     servicos.AddSingleton<IVerificadorProntidao>(repositorio);
+    servicos.AddSingleton<IRepositorioUsuariosLocais>(repositorio);
+    servicos.AddSingleton<IRepositorioChavesApi>(repositorio);
 }
 
 static string DiretorioDb(string relativo) => Path.Combine(AppContext.BaseDirectory, "db", relativo);

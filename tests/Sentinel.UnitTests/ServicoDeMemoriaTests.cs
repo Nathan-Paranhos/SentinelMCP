@@ -21,11 +21,12 @@ public class ServicoDeMemoriaTests
     private static readonly Ator LeitorWeb = new(Emissor, "reader-bob", "web-session", CanalDeAcesso.Web);
     private static readonly Ator AdminSistema = new("system", "admin-api-key", "admin-api", CanalDeAcesso.AdminSistema);
 
-    private static ServicoDeMemoria NovoServico()
+    private static ServicoDeMemoria NovoServico(bool popularDemo = true)
     {
         var repo = new RepositorioSentinelEmMemoria();
-        repo.PopularDadosDemonstracao();
-        return new ServicoDeMemoria(repo, repo, repo, repo, repo);
+        if (popularDemo)
+            repo.PopularDadosDemonstracao();
+        return new ServicoDeMemoria(repo, repo, repo, repo, repo, repo, repo);
     }
 
     private static EntradaProporDecisao Proposta(string chave, int versao = 0, string url = "https://example.com/pr/1") => new(
@@ -202,5 +203,46 @@ public class ServicoDeMemoriaTests
         var vinculo = await servico.ConfigurarVinculoAsync(MantenedorWeb, Ws, Emissor, "codex-agent", PapelUsuario.Colaborador);
         Assert.Equal(Ws, projeto.EspacoTrabalhoId);
         Assert.Equal("codex-agent", vinculo.Sujeito);
+    }
+
+    [Fact]
+    public async Task ConfiguracaoInicial_EAutenticacaoLocalPbkdf2_SemDadosMock()
+    {
+        var servico = NovoServico(popularDemo: false);
+        Assert.True(await servico.ConfiguracaoInicialPendenteAsync());
+
+        var cfg = await servico.ExecutarConfiguracaoInicialAsync(new EntradaConfiguracaoInicial(
+            "Minha Org", "minha-org", "Core API", "core-api", "nathan.eng", "Nathan", "SenhaForte#123"), Emissor);
+
+        Assert.False(await servico.ConfiguracaoInicialPendenteAsync());
+        Assert.Equal(PapelUsuario.Mantenedor, cfg.Vinculo.Papel);
+
+        await Assert.ThrowsAsync<ExcecaoDeConflito>(() => servico.ExecutarConfiguracaoInicialAsync(new EntradaConfiguracaoInicial(
+            "Outra", "outra", "P2", "p2", "outro", null, "SenhaForte#123"), Emissor));
+
+        var autenticado = await servico.AutenticarUsuarioLocalAsync("nathan.eng", "SenhaForte#123");
+        Assert.Equal("nathan.eng", autenticado.Sujeito);
+
+        await Assert.ThrowsAsync<ExcecaoDeNaoAutorizado>(() =>
+            servico.AutenticarUsuarioLocalAsync("nathan.eng", "SenhaErrada"));
+    }
+
+    [Fact]
+    public async Task ChavesApi_ERemoverProjeto_ValidamEscoposEHistoricoImutavel()
+    {
+        var servico = NovoServico();
+
+        var chaveRes = await servico.CriarChaveApiAsync(MantenedorWeb, new EntradaCriarChaveApi(
+            Ws, "Codex Local", "codex-runner", "codex", PapelUsuario.Colaborador, ["read:memory", "write:decision"], 30), Emissor);
+        Assert.StartsWith("snt_", chaveRes.TokenPlano);
+        Assert.Single((await servico.ListarChavesApiAsync(MantenedorWeb, Ws)));
+        Assert.True(await servico.RevogarChaveApiAsync(MantenedorWeb, Ws, chaveRes.Chave.ChaveId));
+        Assert.Empty(await servico.ListarChavesApiAsync(MantenedorWeb, Ws));
+
+        // Projeto com histórico não pode ser removido; projeto vazio pode
+        await Assert.ThrowsAsync<ExcecaoDeConflito>(() => servico.RemoverProjetoAsync(MantenedorWeb, Ws, Proj));
+
+        var vazio = await servico.CriarProjetoAsync(MantenedorWeb, Ws, "Temporario", "temporario-1");
+        Assert.True(await servico.RemoverProjetoAsync(MantenedorWeb, Ws, vazio.ProjetoId));
     }
 }

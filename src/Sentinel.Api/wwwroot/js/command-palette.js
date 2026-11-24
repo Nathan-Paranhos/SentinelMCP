@@ -28,6 +28,11 @@ export class CommandPalette {
             });
         }
 
+        const closeBtn = document.getElementById('command-close-btn');
+        if (closeBtn) {
+            closeBtn.addEventListener('click', () => this.close());
+        }
+
         if (this.input) {
             this.input.addEventListener('input', () => {
                 this.focusedIndex = 0;

@@ -26,3 +26,7 @@ preview.html
 SentinelMascot.tsx
 sentinelTimeline.ts
 
+# Persistência local de desenvolvimento
+data/
+*.sentinel.json
+

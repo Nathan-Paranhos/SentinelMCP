@@ -24,7 +24,9 @@ public sealed class RepositorioSentinelPostgreSql :
     IRepositorioHistorico,
     IReconstrutorProjecoes,
     IManutencaoRetencao,
-    IVerificadorProntidao
+    IVerificadorProntidao,
+    IRepositorioUsuariosLocais,
+    IRepositorioChavesApi
 {
     private const string ColunasEvento =
         "event_id, workspace_id, project_id, stream_id, stream_version, type, schema_version, recorded_at, author_subject, author_issuer, client_id, payload_id, ref_event_id, reason";
@@ -56,7 +58,8 @@ public sealed class RepositorioSentinelPostgreSql :
         Func<NpgsqlConnection, NpgsqlTransaction, Task<T>> acao,
         CancellationToken ct,
         bool somenteLeitura = false,
-        (string Emissor, string Sujeito)? identidade = null)
+        (string Emissor, string Sujeito)? identidade = null,
+        string? hashChave = null)
     {
         await using var conexao = await _fonte.OpenConnectionAsync(ct);
         await using var transacao = await conexao.BeginTransactionAsync(IsolationLevel.ReadCommitted, ct);
@@ -69,12 +72,13 @@ public sealed class RepositorioSentinelPostgreSql :
             }
 
             await using (var cmdContexto = new NpgsqlCommand(
-                "SELECT set_config('app.current_workspace_id', @ws, true), set_config('app.current_issuer', @iss, true), set_config('app.current_subject', @sub, true)",
+                "SELECT set_config('app.current_workspace_id', @ws, true), set_config('app.current_issuer', @iss, true), set_config('app.current_subject', @sub, true), set_config('app.current_key_hash', @kh, true)",
                 conexao, transacao))
             {
                 cmdContexto.Parameters.AddWithValue("ws", espacoTrabalhoId?.ToString() ?? string.Empty);
                 cmdContexto.Parameters.AddWithValue("iss", identidade?.Emissor ?? string.Empty);
                 cmdContexto.Parameters.AddWithValue("sub", identidade?.Sujeito ?? string.Empty);
+                cmdContexto.Parameters.AddWithValue("kh", hashChave ?? string.Empty);
                 await cmdContexto.ExecuteNonQueryAsync(ct);
             }
 
@@ -94,13 +98,13 @@ public sealed class RepositorioSentinelPostgreSql :
         }
     }
 
-    private Task<List<T>> ListarAsync<T>(Guid? espacoTrabalhoId, string sql, Action<NpgsqlCommand> parametros, Func<NpgsqlDataReader, T> mapear, CancellationToken ct, (string, string)? identidade = null) =>
+    private Task<List<T>> ListarAsync<T>(Guid? espacoTrabalhoId, string sql, Action<NpgsqlCommand> parametros, Func<NpgsqlDataReader, T> mapear, CancellationToken ct, (string, string)? identidade = null, string? hashChave = null) =>
         EmTransacaoAsync(espacoTrabalhoId, async (c, tx) =>
         {
             await using var cmd = new NpgsqlCommand(sql, c, tx);
             parametros(cmd);
             return await LerListaAsync(cmd, mapear, ct);
-        }, ct, somenteLeitura: true, identidade: identidade);
+        }, ct, somenteLeitura: true, identidade: identidade, hashChave: hashChave);
 
     private async Task<T?> PrimeiroAsync<T>(Guid espacoTrabalhoId, string sql, Action<NpgsqlCommand> parametros, Func<NpgsqlDataReader, T> mapear, CancellationToken ct) where T : class
     {
@@ -264,6 +268,13 @@ public sealed class RepositorioSentinelPostgreSql :
             cmd => cmd.Parameters.AddWithValue("ws", espacoTrabalhoId),
             r => new Projeto(r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetString(3), Instante(r, 4)), ct);
 
+    public async Task<bool> PossuiAlgumEspacoAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _fonte.CreateCommand("SELECT EXISTS (SELECT 1 FROM workspaces)");
+        var res = await cmd.ExecuteScalarAsync(ct);
+        return res is true;
+    }
+
     public async Task<EspacoTrabalho> CriarEspacoTrabalhoAsync(string nome, string slug, Guid? espacoTrabalhoId = null, CancellationToken ct = default)
     {
         var id = espacoTrabalhoId ?? Guid.NewGuid();
@@ -294,9 +305,9 @@ public sealed class RepositorioSentinelPostgreSql :
     public async Task<Projeto> CriarProjetoAsync(Guid espacoTrabalhoId, string nome, string slug, Guid? projetoId = null, CancellationToken ct = default)
     {
         var id = projetoId ?? Guid.NewGuid();
-        try
+        return await EmTransacaoAsync(espacoTrabalhoId, async (c, tx) =>
         {
-            return await EmTransacaoAsync(espacoTrabalhoId, async (c, tx) =>
+            try
             {
                 await using var cmd = c.CreateCommand();
                 cmd.Transaction = tx;
@@ -309,13 +320,35 @@ public sealed class RepositorioSentinelPostgreSql :
                 cmd.Parameters.AddWithValue("slug", slug);
                 var proj = await LerPrimeiroAsync(cmd, r => new Projeto(r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetString(3), Instante(r, 4)), ct);
                 return proj!;
-            }, ct);
-        }
-        catch (PostgresException ex) when (ex.SqlState == "23505")
-        {
-            throw new ExcecaoDeConflito($"Projeto com slug '{slug}' já existe no workspace.");
-        }
+            }
+            catch (PostgresException ex) when (ex.SqlState == "23505")
+            {
+                throw new ExcecaoDeConflito($"Projeto com slug '{slug}' já existe no workspace.");
+            }
+        }, ct);
     }
+
+    public Task<bool> ProjetoPossuiHistoricoAsync(Guid espacoTrabalhoId, Guid projetoId, CancellationToken ct = default) =>
+        EmTransacaoAsync(espacoTrabalhoId, async (c, tx) =>
+        {
+            await using var cmd = new NpgsqlCommand(
+                @"SELECT
+                    EXISTS (SELECT 1 FROM decision_topics WHERE workspace_id = @ws AND project_id = @proj) OR
+                    EXISTS (SELECT 1 FROM incident_streams WHERE workspace_id = @ws AND project_id = @proj) OR
+                    EXISTS (SELECT 1 FROM memory_events WHERE workspace_id = @ws AND project_id = @proj)", c, tx);
+            cmd.Parameters.AddWithValue("ws", espacoTrabalhoId);
+            cmd.Parameters.AddWithValue("proj", projetoId);
+            return (await cmd.ExecuteScalarAsync(ct)) is true;
+        }, ct, somenteLeitura: true);
+
+    public Task<bool> RemoverProjetoAsync(Guid espacoTrabalhoId, Guid projetoId, CancellationToken ct = default) =>
+        EmTransacaoAsync(espacoTrabalhoId, async (c, tx) =>
+        {
+            await using var cmd = new NpgsqlCommand("DELETE FROM projects WHERE workspace_id = @ws AND project_id = @proj", c, tx);
+            cmd.Parameters.AddWithValue("ws", espacoTrabalhoId);
+            cmd.Parameters.AddWithValue("proj", projetoId);
+            return await cmd.ExecuteNonQueryAsync(ct) > 0;
+        }, ct);
 
     public async Task<VinculoMembro> CriarOuAtualizarVinculoAsync(Guid espacoTrabalhoId, string emissor, string sujeito, PapelUsuario papel, bool ativo = true, CancellationToken ct = default)
     {
@@ -1224,4 +1257,136 @@ public sealed class RepositorioSentinelPostgreSql :
         }
         return total;
     }
+
+    // Usuários locais
+    public async Task<bool> PossuiAlgumUsuarioAsync(CancellationToken ct = default)
+    {
+        await using var cmd = _fonte.CreateCommand("SELECT EXISTS (SELECT 1 FROM local_users)");
+        return (await cmd.ExecuteScalarAsync(ct)) is true;
+    }
+
+    public async Task<UsuarioLocal?> ObterPorNomeUsuarioAsync(string nomeUsuario, CancellationToken ct = default)
+    {
+        await using var cmd = _fonte.CreateCommand(
+            @"SELECT user_id, username, issuer, subject, display_name, password_hash, is_active, created_at
+              FROM local_users WHERE username = @u");
+        cmd.Parameters.AddWithValue("u", nomeUsuario.Trim().ToLowerInvariant());
+        return await LerPrimeiroAsync(cmd, MapearUsuarioLocal, ct);
+    }
+
+    public Task<List<UsuarioLocal>> ListarUsuariosDoEspacoAsync(Guid espacoTrabalhoId, CancellationToken ct = default) =>
+        ListarAsync(espacoTrabalhoId,
+            @"SELECT u.user_id, u.username, u.issuer, u.subject, u.display_name, u.password_hash, u.is_active, u.created_at
+              FROM local_users u
+              JOIN memberships m ON m.workspace_id = @ws AND m.issuer = u.issuer AND m.subject = u.subject
+              ORDER BY u.created_at",
+            cmd => cmd.Parameters.AddWithValue("ws", espacoTrabalhoId),
+            MapearUsuarioLocal, ct);
+
+    public async Task<UsuarioLocal> CriarUsuarioLocalAsync(UsuarioLocal usuario, CancellationToken ct = default)
+    {
+        try
+        {
+            await using var cmd = _fonte.CreateCommand(
+                @"INSERT INTO local_users (user_id, username, issuer, subject, display_name, password_hash, is_active, created_at)
+                  VALUES (@id, @u, @iss, @sub, @dn, @hash, @act, @cr)
+                  RETURNING user_id, username, issuer, subject, display_name, password_hash, is_active, created_at");
+            cmd.Parameters.AddWithValue("id", usuario.UsuarioId);
+            cmd.Parameters.AddWithValue("u", usuario.NomeUsuario);
+            cmd.Parameters.AddWithValue("iss", usuario.Emissor);
+            cmd.Parameters.AddWithValue("sub", usuario.Sujeito);
+            Nulavel(cmd, "dn", usuario.NomeExibicao);
+            cmd.Parameters.AddWithValue("hash", usuario.HashSenha);
+            cmd.Parameters.AddWithValue("act", usuario.Ativo);
+            cmd.Parameters.AddWithValue("cr", usuario.CriadoEm);
+            return (await LerPrimeiroAsync(cmd, MapearUsuarioLocal, ct))!;
+        }
+        catch (PostgresException ex) when (ex.SqlState == "23505")
+        {
+            throw new ExcecaoDeConflito($"Usuário local '{usuario.NomeUsuario}' já existe.");
+        }
+    }
+
+    // Chaves de API para agentes MCP
+    public Task<ChaveApiAgente> CriarChaveApiAsync(ChaveApiAgente chave, CancellationToken ct = default) =>
+        EmTransacaoAsync(chave.EspacoTrabalhoId, async (c, tx) =>
+        {
+            try
+            {
+                await using var cmd = new NpgsqlCommand(
+                    @"INSERT INTO agent_api_keys (key_id, workspace_id, name, key_prefix, key_hash, issuer, subject, client_id, scopes, is_active, created_by_subject, created_at, expires_at, last_used_at)
+                      VALUES (@id, @ws, @nm, @pref, @hash, @iss, @sub, @cid, @scopes, @act, @by, @cr, @exp, @lu)
+                      RETURNING key_id, workspace_id, name, key_prefix, key_hash, issuer, subject, client_id, scopes, is_active, created_by_subject, created_at, expires_at, last_used_at",
+                    c, tx);
+                cmd.Parameters.AddWithValue("id", chave.ChaveId);
+                cmd.Parameters.AddWithValue("ws", chave.EspacoTrabalhoId);
+                cmd.Parameters.AddWithValue("nm", chave.Nome);
+                cmd.Parameters.AddWithValue("pref", chave.PrefixoChave);
+                cmd.Parameters.AddWithValue("hash", chave.HashChave);
+                cmd.Parameters.AddWithValue("iss", chave.Emissor);
+                cmd.Parameters.AddWithValue("sub", chave.Sujeito);
+                Nulavel(cmd, "cid", chave.ClienteId);
+                Json(cmd, "scopes", ListaParaJson(chave.Escopos));
+                cmd.Parameters.AddWithValue("act", chave.Ativo);
+                cmd.Parameters.AddWithValue("by", chave.CriadoPorSujeito);
+                cmd.Parameters.AddWithValue("cr", chave.CriadoEm);
+                Nulavel(cmd, "exp", chave.ExpiraEm);
+                Nulavel(cmd, "lu", chave.UltimoUsoEm);
+                return (await LerPrimeiroAsync(cmd, MapearChaveApi, ct))!;
+            }
+            catch (PostgresException ex) when (ex.SqlState == "23505")
+            {
+                throw new ExcecaoDeConflito("Conflito ao registrar chave de API.");
+            }
+        }, ct);
+
+    public Task<List<ChaveApiAgente>> ListarChavesApiAsync(Guid espacoTrabalhoId, CancellationToken ct = default) =>
+        ListarAsync(espacoTrabalhoId,
+            @"SELECT key_id, workspace_id, name, key_prefix, key_hash, issuer, subject, client_id, scopes, is_active, created_by_subject, created_at, expires_at, last_used_at
+              FROM agent_api_keys WHERE workspace_id = @ws ORDER BY created_at DESC",
+            cmd => cmd.Parameters.AddWithValue("ws", espacoTrabalhoId),
+            MapearChaveApi, ct);
+
+    public async Task<ChaveApiAgente?> ObterChaveApiPorHashAsync(string hashSha256Hex, CancellationToken ct = default)
+    {
+        var lista = await ListarAsync(null,
+            @"SELECT key_id, workspace_id, name, key_prefix, key_hash, issuer, subject, client_id, scopes, is_active, created_by_subject, created_at, expires_at, last_used_at
+              FROM agent_api_keys WHERE key_hash = @hash",
+            cmd => cmd.Parameters.AddWithValue("hash", hashSha256Hex),
+            MapearChaveApi, ct, hashChave: hashSha256Hex);
+        return lista.FirstOrDefault();
+    }
+
+    public Task RegistrarUsoChaveApiAsync(Guid espacoTrabalhoId, Guid chaveId, DateTimeOffset usadoEm, CancellationToken ct = default) =>
+        EmTransacaoAsync(espacoTrabalhoId, async (c, tx) =>
+        {
+            await using var cmd = new NpgsqlCommand(
+                "UPDATE agent_api_keys SET last_used_at = @lu WHERE workspace_id = @ws AND key_id = @id", c, tx);
+            cmd.Parameters.AddWithValue("lu", usadoEm);
+            cmd.Parameters.AddWithValue("ws", espacoTrabalhoId);
+            cmd.Parameters.AddWithValue("id", chaveId);
+            await cmd.ExecuteNonQueryAsync(ct);
+            return 0;
+        }, ct);
+
+    public Task<bool> RevogarChaveApiAsync(Guid espacoTrabalhoId, Guid chaveId, CancellationToken ct = default) =>
+        EmTransacaoAsync(espacoTrabalhoId, async (c, tx) =>
+        {
+            await using var cmd = new NpgsqlCommand(
+                "DELETE FROM agent_api_keys WHERE workspace_id = @ws AND key_id = @id", c, tx);
+            cmd.Parameters.AddWithValue("ws", espacoTrabalhoId);
+            cmd.Parameters.AddWithValue("id", chaveId);
+            return await cmd.ExecuteNonQueryAsync(ct) > 0;
+        }, ct);
+
+    private static UsuarioLocal MapearUsuarioLocal(NpgsqlDataReader r) => new(
+        r.GetGuid(0), r.GetString(1), r.GetString(2), r.GetString(3),
+        TextoOuNulo(r, 4), r.GetString(5), r.GetBoolean(6), Instante(r, 7));
+
+    private static ChaveApiAgente MapearChaveApi(NpgsqlDataReader r) => new(
+        r.GetGuid(0), r.GetGuid(1), r.GetString(2), r.GetString(3), r.GetString(4),
+        r.GetString(5), r.GetString(6), TextoOuNulo(r, 7), TextosDeJson(r.GetString(8)),
+        r.GetBoolean(9), r.GetString(10), Instante(r, 11),
+        r.IsDBNull(12) ? null : Instante(r, 12),
+        r.IsDBNull(13) ? null : Instante(r, 13));
 }

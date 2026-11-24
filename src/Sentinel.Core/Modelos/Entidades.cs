@@ -207,3 +207,43 @@ public sealed record IncidenteReconstituido(
     List<string> ChavesTecnicas,
     List<Evidencia> Evidencias
 );
+
+public sealed record UsuarioLocal(
+    Guid UsuarioId,
+    string NomeUsuario,
+    string Emissor,
+    string Sujeito,
+    string? NomeExibicao,
+    string HashSenha,
+    bool Ativo,
+    DateTimeOffset CriadoEm
+);
+
+public sealed record ChaveApiAgente(
+    Guid ChaveId,
+    Guid EspacoTrabalhoId,
+    string Nome,
+    string PrefixoChave,
+    string HashChave,
+    string Emissor,
+    string Sujeito,
+    string? ClienteId,
+    List<string> Escopos,
+    bool Ativo,
+    string CriadoPorSujeito,
+    DateTimeOffset CriadoEm,
+    DateTimeOffset? ExpiraEm,
+    DateTimeOffset? UltimoUsoEm
+);
+
+public sealed record ResultadoCriarChaveApi(
+    ChaveApiAgente Chave,
+    string TokenPlano
+);
+
+public sealed record ResultadoConfiguracaoInicial(
+    EspacoTrabalho EspacoTrabalho,
+    Projeto Projeto,
+    UsuarioLocal Usuario,
+    VinculoMembro Vinculo
+);

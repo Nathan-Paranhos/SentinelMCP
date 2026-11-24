@@ -282,4 +282,133 @@ public sealed class AdminEndpointHandler
         _log.LogInformation("Vínculo {MembershipId} removido do workspace {WorkspaceId}", membershipId, workspaceId);
         return Results.Ok(new { success = true, removedMembershipId = membershipId });
     });
+
+    public Task<IResult> HandleDeleteProjectAsync(HttpContext ctx, Guid workspaceId, Guid projectId) => ExecutarAsync(ctx, mutacao: true, async ator =>
+    {
+        var removido = await _servico.RemoverProjetoAsync(ator, workspaceId, projectId, ctx.RequestAborted);
+        if (!removido)
+            return Results.NotFound(new { code = "NOT_FOUND", message = $"Projeto {projectId} não encontrado no workspace." });
+
+        _log.LogInformation("Projeto {ProjectId} removido do workspace {WorkspaceId}", projectId, workspaceId);
+        return Results.Ok(new { success = true, removedProjectId = projectId });
+    });
+
+    public Task<IResult> HandleListApiKeysAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: false, async ator =>
+    {
+        var chaves = await _servico.ListarChavesApiAsync(ator, workspaceId, ctx.RequestAborted);
+        return Results.Ok(chaves.Select(k => new
+        {
+            keyId = k.ChaveId,
+            workspaceId = k.EspacoTrabalhoId,
+            name = k.Nome,
+            keyPrefix = k.PrefixoChave,
+            issuer = k.Emissor,
+            subject = k.Sujeito,
+            clientId = k.ClienteId,
+            scopes = k.Escopos,
+            isActive = k.Ativo,
+            createdBySubject = k.CriadoPorSujeito,
+            createdAt = k.CriadoEm,
+            expiresAt = k.ExpiraEm,
+            lastUsedAt = k.UltimoUsoEm
+        }));
+    });
+
+    public sealed record RequisicaoCriarChaveApi(string? Name, string? Subject, string? ClientId, string? Role, List<string>? Scopes, int? ExpiresInDays);
+
+    public Task<IResult> HandleCreateApiKeyAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: true, async ator =>
+    {
+        var req = await JsonSerializer.DeserializeAsync<RequisicaoCriarChaveApi>(ctx.Request.Body, OpcoesJson, ctx.RequestAborted);
+        if (req == null)
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
+
+        if (!ConversorDeEnumeradores.TentarConverterPapel(req.Role ?? "Contributor", out var papel))
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Papel inválido. Valores aceitos: Reader, Contributor, Maintainer." });
+
+        var emissorLocal = _config["Sentinel:Web:LocalIssuer"] ?? "https://auth.sentinel.dev";
+        var resultado = await _servico.CriarChaveApiAsync(
+            ator,
+            new EntradaCriarChaveApi(workspaceId, req.Name, req.Subject, req.ClientId, papel, req.Scopes, req.ExpiresInDays),
+            emissorLocal,
+            ctx.RequestAborted);
+
+        var k = resultado.Chave;
+        _log.LogInformation("Chave de API {KeyPrefix}... criada para {Subject} no workspace {WorkspaceId}", k.PrefixoChave, k.Sujeito, workspaceId);
+        return Results.Created($"/api/admin/workspaces/{workspaceId}/api-keys/{k.ChaveId}", new
+        {
+            key = new
+            {
+                keyId = k.ChaveId,
+                workspaceId = k.EspacoTrabalhoId,
+                name = k.Nome,
+                keyPrefix = k.PrefixoChave,
+                issuer = k.Emissor,
+                subject = k.Sujeito,
+                clientId = k.ClienteId,
+                scopes = k.Escopos,
+                isActive = k.Ativo,
+                createdBySubject = k.CriadoPorSujeito,
+                createdAt = k.CriadoEm,
+                expiresAt = k.ExpiraEm,
+                lastUsedAt = k.UltimoUsoEm
+            },
+            token = resultado.TokenPlano
+        });
+    });
+
+    public Task<IResult> HandleRevokeApiKeyAsync(HttpContext ctx, Guid workspaceId, Guid keyId) => ExecutarAsync(ctx, mutacao: true, async ator =>
+    {
+        var revogada = await _servico.RevogarChaveApiAsync(ator, workspaceId, keyId, ctx.RequestAborted);
+        if (!revogada)
+            return Results.NotFound(new { code = "NOT_FOUND", message = $"Chave {keyId} não encontrada no workspace." });
+
+        _log.LogInformation("Chave de API {KeyId} revogada no workspace {WorkspaceId}", keyId, workspaceId);
+        return Results.Ok(new { success = true, revokedKeyId = keyId });
+    });
+
+    public Task<IResult> HandleListUsersAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: false, async ator =>
+    {
+        var lista = await _servico.ListarUsuariosDoEspacoAsync(ator, workspaceId, ctx.RequestAborted);
+        return Results.Ok(lista.Select(u => new
+        {
+            userId = u.UsuarioId,
+            username = u.NomeUsuario,
+            displayName = u.NomeExibicao,
+            issuer = u.Emissor,
+            subject = u.Sujeito,
+            isActive = u.Ativo,
+            createdAt = u.CriadoEm
+        }));
+    });
+
+    public sealed record RequisicaoCriarUsuario(string? Username, string? DisplayName, string? Password, string? Role);
+
+    public Task<IResult> HandleCreateUserAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: true, async ator =>
+    {
+        var req = await JsonSerializer.DeserializeAsync<RequisicaoCriarUsuario>(ctx.Request.Body, OpcoesJson, ctx.RequestAborted);
+        if (req == null)
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
+
+        if (!ConversorDeEnumeradores.TentarConverterPapel(req.Role ?? "Reader", out var papel))
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Papel inválido. Valores aceitos: Reader, Contributor, Maintainer." });
+
+        var emissorLocal = _config["Sentinel:Web:LocalIssuer"] ?? "https://auth.sentinel.dev";
+        var u = await _servico.CriarUsuarioLocalNoEspacoAsync(
+            ator,
+            new EntradaCriarUsuarioLocal(workspaceId, req.Username, req.DisplayName, req.Password, papel),
+            emissorLocal,
+            ctx.RequestAborted);
+
+        _log.LogInformation("Usuário web local {Username} criado no workspace {WorkspaceId}", u.NomeUsuario, workspaceId);
+        return Results.Created($"/api/admin/workspaces/{workspaceId}/users/{u.UsuarioId}", new
+        {
+            userId = u.UsuarioId,
+            username = u.NomeUsuario,
+            displayName = u.NomeExibicao,
+            issuer = u.Emissor,
+            subject = u.Sujeito,
+            isActive = u.Ativo,
+            createdAt = u.CriadoEm
+        });
+    });
 }

@@ -21,18 +21,22 @@ function comoLista(valor) {
 
 class Store {
     constructor() {
+        const telaMedia = typeof window !== 'undefined' && window.innerWidth <= 1280;
+        const telaEstreita = typeof window !== 'undefined' && window.innerWidth <= 1080;
         this.state = {
-            activeView: 'reviews',
+            activeView: 'overview',
             selectedReviewId: null,
             selectedDecisionId: null,
             selectedIncidentId: null,
-            sidebarCollapsed: false,
-            inspectorOpen: true,
+            mobileDetailOpen: false,
+            sidebarCollapsed: telaEstreita,
+            inspectorOpen: !telaMedia,
             theme: lerTemaSalvo(),
             filterText: '',
             filterProjectId: 'all',
             timelineFilter: 'all',
             activeMcpClient: 'codex',
+            sistema: null,
             projetos: [],
             propostas: [],
             decisoes: [],
@@ -43,6 +47,9 @@ class Store {
             usuario: null,
             csrf: null,
             adminDetails: null,
+            apiKeys: [],
+            localUsers: [],
+            generatedApiToken: null,
             receiptPreview: null
         };
         this.listeners = new Map();
@@ -63,6 +70,7 @@ class Store {
 
     initData(payload) {
         const dados = payload || {};
+        this.state.sistema = dados.sistema || null;
         this.state.projetos = comoLista(dados.projetos);
         this.state.propostas = comoLista(dados.propostas);
         this.state.decisoes = comoLista(dados.decisoes);

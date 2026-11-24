@@ -186,6 +186,66 @@ public abstract class AdminApiBase
         }));
         Assert.Equal(HttpStatusCode.BadRequest, papelResp.StatusCode);
     }
+
+    [SkippableFact]
+    public async Task Admin_ChavesApi_GerarAutenticarNoMcpERevogar()
+    {
+        var alice = await SessaoWeb.EntrarAsync(Fabrica, "maintainer-alice");
+        var criarResp = await alice.PostarAsync($"/api/admin/workspaces/{WsA}/api-keys", new
+        {
+            name = "Codex Real",
+            subject = "codex-ci-runner",
+            clientId = "codex",
+            role = "Contributor",
+            scopes = new[] { "read:memory", "write:decision" }
+        });
+        Assert.Equal(HttpStatusCode.Created, criarResp.StatusCode);
+
+        var criada = await criarResp.Content.ReadFromJsonAsync<JsonElement>();
+        var keyId = criada.GetProperty("key").GetProperty("keyId").GetGuid();
+        var token = criada.GetProperty("token").GetString()!;
+        Assert.StartsWith("snt_", token);
+
+        // Chave real funciona em POST /mcp sem allowMockTokens
+        var mcp = new ClienteMcp(Fabrica.CreateClient());
+        var ws = (await mcp.ToolAsync("list_workspaces", new { }, token)).Sucesso();
+        Assert.Equal(WsA, ws.GetProperty("workspaces")[0].GetProperty("workspaceId").GetGuid());
+
+        // Revoga chave via sessão web + CSRF e confirma 401 depois
+        var delReq = new HttpRequestMessage(HttpMethod.Delete, $"/api/admin/workspaces/{WsA}/api-keys/{keyId}");
+        delReq.Headers.Add("X-CSRF-Token", alice.TokenCsrf);
+        var delResp = await alice.Http.SendAsync(delReq);
+        Assert.Equal(HttpStatusCode.OK, delResp.StatusCode);
+
+        var posRevogacao = await mcp.EnviarAsync(new { jsonrpc = "2.0", id = 99, method = "tools/list" }, token);
+        Assert.Equal(HttpStatusCode.Unauthorized, posRevogacao.StatusCode);
+    }
+
+    [SkippableFact]
+    public async Task Admin_RemoverProjeto_VazioPermitidoComHistorico409()
+    {
+        var alice = await SessaoWeb.EntrarAsync(Fabrica, "maintainer-alice");
+
+        // Projeto com histórico existente retorna 409 Conflict
+        var delHistReq = new HttpRequestMessage(HttpMethod.Delete, $"/api/admin/workspaces/{WsA}/projects/{ProjA}");
+        delHistReq.Headers.Add("X-CSRF-Token", alice.TokenCsrf);
+        var delHistResp = await alice.Http.SendAsync(delHistReq);
+        Assert.Equal(HttpStatusCode.Conflict, delHistResp.StatusCode);
+
+        // Projeto novo sem eventos pode ser removido com confirmação web
+        var criarResp = await alice.PostarAsync($"/api/admin/workspaces/{WsA}/projects", new
+        {
+            name = "Projeto Excluir",
+            slug = $"proj-del-{Guid.NewGuid():N}"[..18]
+        });
+        Assert.Equal(HttpStatusCode.Created, criarResp.StatusCode);
+        var projId = (await criarResp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("projectId").GetGuid();
+
+        var delOkReq = new HttpRequestMessage(HttpMethod.Delete, $"/api/admin/workspaces/{WsA}/projects/{projId}");
+        delOkReq.Headers.Add("X-CSRF-Token", alice.TokenCsrf);
+        var delOkResp = await alice.Http.SendAsync(delOkReq);
+        Assert.Equal(HttpStatusCode.OK, delOkResp.StatusCode);
+    }
 }
 
 public sealed class AdminApiEmMemoriaTests : AdminApiBase, IClassFixture<ProvedorEmMemoria>

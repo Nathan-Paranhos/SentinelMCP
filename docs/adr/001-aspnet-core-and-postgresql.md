@@ -28,7 +28,7 @@ Para ambientes corporativos on-premise e cloud sob demanda de governança e alta
 - O **SDK oficial MCP para C# foi integrado**: `ModelContextProtocol.AspNetCore` atende transporte HTTP stateful em `/mcp/sse` e transporte `--stdio` via CLI para clientes locais (ex.: OpenAI Codex e Claude Code), coexistindo com o endpoint stateless `POST /mcp` com negociação para `2025-11-25`, `2025-06-18`, `2025-03-26` e `2024-11-05`.
 - Todas as 6 ferramentas (`propose_decision`, `log_incident`, `query_context`, `get_timeline`, `get_context_receipt`, `list_workspaces`) publicam `inputSchema`, `outputSchema` e `annotations`, além de suporte a `resources/*` e `prompts/*`.
 - Instrumentação com **OpenTelemetry** (Tracing, Métricas do ASP.NET Core, HttpClient, Runtime, contadores de ferramentas MCP e exportador OTLP configurável).
-- API administrativa em `/api/admin/*` para gestão de workspaces, projetos e vínculos protegida por chave de administração (`ADMIN_API_KEY`) ou sessão web autenticada de `Maintainer` com CSRF.
-- PostgreSQL com Npgsql e SQL puro, RLS, `tsvector`/GIN e chaves técnicas normalizadas estão implementados (migrações 001 a 004). `pgvector` não é usado.
+- API administrativa em `/api/admin/*` para gestão de workspaces, projetos, chaves de API (`snt_...` SHA-256), usuários locais (PBKDF2) e vínculos protegida por chave de administração (`ADMIN_API_KEY`) ou sessão web autenticada de `Maintainer` com CSRF.
+- PostgreSQL com Npgsql e SQL puro, RLS, `tsvector`/GIN e chaves técnicas normalizadas estão implementados (migrações 001 a 005). `pgvector` não é usado.
 - Política de segurança de conteúdo (CSP) estrita em todas as páginas HTML, sem exceções de scripts inline ou CDNs.
 - O compose local usa a imagem `postgres:17-alpine`; os testes de integração usam `postgres:16-alpine` via Testcontainers.
