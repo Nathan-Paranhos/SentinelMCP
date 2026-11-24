@@ -23,3 +23,10 @@ Agentes de IA e ferramentas MCP interagem por redes sujeitas a timeouts, retenta
 - Garante total segurança em retentativas transparentes dos clientes MCP.
 - Tópicos diferentes possuem fluxos independentes e não bloqueiam uns aos outros.
 - **Gatilho de revisão**: Monitorar a contenção por tópico em cenários de alta concorrência e o tamanho da tabela de recibos com expiração configurada (janela padrão de 30 dias).
+
+## Estado da implementação (2026-11)
+- Implementado como descrito, com estes detalhes:
+  - No PostgreSQL, um lock consultivo de transação (`pg_advisory_xact_lock`) por chave de idempotência serializa retentativas concorrentes antes da consulta a `command_receipts`; o tópico é travado com `SELECT ... FOR UPDATE`; a primeira proposta cria o tópico com `INSERT ... ON CONFLICT`. Uma violação de unicidade residual (23505) é devolvida como `VERSION_CONFLICT`.
+  - Há no máximo **uma proposta pendente por tópico**: nova proposta enquanto existe pendente retorna `PROPOSAL_PENDING` (com o ID da proposta pendente).
+  - A impressão digital dos argumentos é SHA-256 (`AjudanteIdempotencia`).
+  - A janela de 30 dias é aplicada por um job em segundo plano (`Sentinel:Retention:*`) que expurga `command_receipts` e `context_receipts`; após o expurgo, a mesma chave é tratada como comando novo.

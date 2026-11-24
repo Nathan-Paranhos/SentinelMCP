@@ -122,3 +122,17 @@ A lógica de domínio depende de contratos internos de persistência. MCP e a p�
 - AC-06 Vigência e histórico
 - AC-07 Qualidade e latência
 - AC-08 Recuperação e reprodução
+
+## Estado da implementação (2026-11)
+
+Notas sobre pontos em que este documento (versão 0.1) difere do código atual. A especificação acima foi mantida como registro do desenho.
+
+- **Cabeçalho / seção 5 (SDK oficial MCP)**: o SDK oficial não foi adotado. `POST /mcp` é JSON-RPC escrito à mão (`src/Sentinel.Api/Mcp/`), sem sessão, com respostas JSON e negociação de versão própria (2025-06-18, 2025-03-26, 2024-11-05; ecoa a versão pedida se suportada, senão oferece a mais recente). `GET`/`DELETE /mcp` retornam 405; notificações recebem 202. As tools publicam `inputSchema` (sem `outputSchema`; a propriedade existe em `McpToolDefinition` mas não é preenchida) e devolvem `structuredContent` mais um resumo em texto. A adoção do SDK é pendência.
+- **Seção 3 (módulos)**: não há módulos `Decisions`, `Incidents`, `Context` e `Identity` separados. Os casos de uso estão numa única classe, `src/Sentinel.Core/CasosDeUso/ServicoDeMemoria.cs`, com contratos de repositório em `src/Sentinel.Core/Contratos`; a identidade de agentes fica em `src/Sentinel.Api/Auth` e a revisão web em `src/Sentinel.Api/WebReview`.
+- **Seção 3 (validação OAuth ponta a ponta)**: os testes automatizados usam tokens mock e login de desenvolvimento; não há teste contra um provedor de identidade real.
+- **Seção 5 (`get_context_receipt`)**: além do autor, Maintainers do workspace também podem ler o comprovante. O comprovante inclui `digest` SHA-256 e `integrityVerified` (controle de integridade, não assinatura digital).
+- **Seção 6.1 (idempotência)**: no PostgreSQL, além da restrição única em `command_receipts`, um lock consultivo de transação por chave serializa retentativas concorrentes. Só pode haver uma proposta pendente por tópico (`PROPOSAL_PENDING`).
+- **Seção 6.2 (busca)**: também há fallback por `ILIKE` em título/resumo; não há `unaccent`.
+- **Seção 7 (OAuth PKCE S256)**: o servidor MCP atua apenas como *resource server*: valida JWT (emissor, audiência, assinatura, expiração, escopos em `scope`/`scp`) quando `Authentication:Mcp:Authority` está configurado e publica `/.well-known/oauth-protected-resource`. Não implementa autorização OAuth nem PKCE para agentes; o cliente obtém o token no provedor. PKCE é usado apenas no login OIDC da página de revisão. Também são aceitas chaves de API (hash SHA-256 em `Sentinel:ApiKeys`) e, fora de Production com opt-in, tokens mock.
+- **Seção 7 (logs)**: logs via `ILogger` (JSON fora de Development); não há OpenTelemetry.
+- **Seção 8**: os critérios AC-01 a AC-08 estão em `tests/Sentinel.IntegrationTests/CriteriosDeAceite.cs` e rodam contra InMemory e contra PostgreSQL 16 via Testcontainers.

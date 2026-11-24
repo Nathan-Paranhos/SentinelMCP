@@ -1,3 +1,24 @@
+function lerTemaSalvo() {
+    try {
+        const salvo = localStorage.getItem('sentinel_theme');
+        return salvo === 'light' || salvo === 'dark' ? salvo : 'dark';
+    } catch (e) {
+        return 'dark';
+    }
+}
+
+function salvarTema(tema) {
+    try {
+        localStorage.setItem('sentinel_theme', tema);
+    } catch (e) {
+        // localStorage indisponível: o tema vale apenas para esta página.
+    }
+}
+
+function comoLista(valor) {
+    return Array.isArray(valor) ? valor : [];
+}
+
 class Store {
     constructor() {
         this.state = {
@@ -7,22 +28,17 @@ class Store {
             selectedIncidentId: null,
             sidebarCollapsed: false,
             inspectorOpen: true,
-            theme: localStorage.getItem('sentinel_theme') || 'dark',
+            theme: lerTemaSalvo(),
             searchTerm: '',
             propostas: [],
             decisoes: [],
             incidentes: [],
             eventos: [],
-            workspace: {
-                id: '11111111-1111-1111-1111-111111111111',
-                nome: 'Pagamentos e Cobrança',
-                slug: 'pagamentos-cobranca'
-            },
-            usuario: {
-                sujeito: 'maintainer-alice',
-                papel: 'Maintainer',
-                emissor: 'https://auth.sentinel.dev'
-            }
+            workspaces: [],
+            workspace: null,
+            // Preenchidos exclusivamente pelo servidor (GET /api/review/state).
+            usuario: null,
+            csrf: null
         };
         this.listeners = new Map();
     }
@@ -34,32 +50,38 @@ class Store {
     set(key, value) {
         this.state[key] = value;
         if (key === 'theme') {
-            localStorage.setItem('sentinel_theme', value);
+            salvarTema(value);
             document.documentElement.setAttribute('data-theme', value);
         }
         this.notify(key, value);
     }
 
+    /**
+     * Aplica (ou reaplica, após recarregar) o estado vindo do servidor.
+     * Mantém as seleções atuais quando o item ainda existe.
+     */
     initData(payload) {
-        if (payload.propostas) this.state.propostas = payload.propostas;
-        if (payload.decisoes) this.state.decisoes = payload.decisoes;
-        if (payload.incidentes) this.state.incidentes = payload.incidentes;
-        if (payload.eventos) this.state.eventos = payload.eventos;
-        if (payload.workspaces) this.state.workspaces = payload.workspaces;
-        if (payload.workspace) this.state.workspace = payload.workspace;
+        const dados = payload || {};
+        this.state.propostas = comoLista(dados.propostas);
+        this.state.decisoes = comoLista(dados.decisoes);
+        this.state.incidentes = comoLista(dados.incidentes);
+        this.state.eventos = comoLista(dados.eventos);
+        this.state.workspaces = comoLista(dados.workspaces);
+        this.state.workspace = dados.workspace || null;
+        this.state.usuario = dados.usuario || null;
+        this.state.csrf = dados.csrf || null;
 
-        if (this.state.propostas.length > 0) {
-            this.state.selectedReviewId = this.state.propostas[0].topicoId;
-        }
-        if (this.state.decisoes.length > 0) {
-            this.state.selectedDecisionId = this.state.decisoes[0].topicoId;
-        }
-        if (this.state.incidentes.length > 0) {
-            this.state.selectedIncidentId = this.state.incidentes[0].incidenteId;
-        }
+        this.state.selectedReviewId = this.manterSelecao(this.state.selectedReviewId, this.state.propostas, 'topicoId');
+        this.state.selectedDecisionId = this.manterSelecao(this.state.selectedDecisionId, this.state.decisoes, 'topicoId');
+        this.state.selectedIncidentId = this.manterSelecao(this.state.selectedIncidentId, this.state.incidentes, 'incidenteId');
 
         document.documentElement.setAttribute('data-theme', this.state.theme);
         this.notify('all', this.state);
+    }
+
+    manterSelecao(atual, lista, chave) {
+        if (atual && lista.some(item => item && item[chave] === atual)) return atual;
+        return lista.length > 0 && lista[0] ? lista[0][chave] : null;
     }
 
     subscribe(key, callback) {

@@ -16,3 +16,9 @@ O Sentinel atua como fonte da verdade para decisões técnicas e incidentes de e
 - Nenhuma dependência de filas externas ou workers assíncronos para a consistência do MVP.
 - O histórico é estritamente imutável e auditável.
 - **Gatilho de revisão**: Se o volume de escrita e a complexidade de indexação (como vetores densos via modelo LLM) gerarem contenção na transação de escrita, introduzir o padrão Transactional Outbox para processamento assíncrono mantendo a projeção relacional síncrona.
+
+## Estado da implementação (2026-11)
+- Implementado como descrito: evento, payload, projeção e recibo de comando na mesma transação; projeções sempre derivadas de `RedutorDeDecisao` / `RedutorDeIncidente`.
+- A interface de reconstrução chama-se `IReconstrutorProjecoes` (`src/Sentinel.Core/Contratos/IRepositorios.cs`), não `IProjectionRebuilder`. É acionada pela CLI `--rebuild-projections [--workspace-id <uuid>]` e automaticamente após `--migrate` aplicar a migração 003 e após `--seed-demo` no PostgreSQL. Não há endpoint HTTP de reconstrução.
+- Além de `decision_current` e `incident_current`, existe a projeção `decision_pending_proposals` (migração 003), com o conteúdo da proposta pendente exibido ao revisor.
+- A migração 003 torna `memory_events` e `memory_payloads` append-only por trigger (`UPDATE`, `DELETE` e `TRUNCATE` bloqueados).

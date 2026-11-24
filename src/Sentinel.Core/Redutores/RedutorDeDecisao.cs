@@ -2,6 +2,16 @@ using Sentinel.Core.Modelos;
 
 namespace Sentinel.Core.Redutores;
 
+public static class TiposDeEvento
+{
+    public const string DecisaoProposta = "DecisionProposed";
+    public const string DecisaoAprovada = "DecisionApproved";
+    public const string DecisaoRejeitada = "DecisionRejected";
+    public const string DecisaoSubstituida = "DecisionSuperseded";
+    public const string IncidenteReportado = "IncidentReported";
+}
+
+// Redutor de fluxo de decisões
 public static class RedutorDeDecisao
 {
     public static DecisaoReconstituida Reconstituir(
@@ -22,51 +32,52 @@ public static class RedutorDeDecisao
         Guid? registroAtivoId = null;
         int? versaoRegistroAtivo = null;
         Guid? propostaPendenteId = null;
+        EventoMemoria? eventoPropostaPendente = null;
         CargaMemoria? cargaAtiva = null;
-        CargaMemoria? cargaMaisRecente = null;
+        CargaMemoria? cargaUltimaProposta = null;
 
         foreach (var ev in eventosFiltrados)
         {
             versaoFluxoCorrente = ev.VersaoFluxo;
-            var carga = ev.CargaId.HasValue ? resolvedorDeCarga(ev.CargaId.Value) : null;
-            if (carga != null)
-            {
-                cargaMaisRecente = carga;
-            }
 
             switch (ev.Tipo)
             {
-                case "DecisionProposed":
+                case TiposDeEvento.DecisaoProposta:
                     propostaPendenteId = ev.CargaId;
+                    eventoPropostaPendente = ev;
+                    cargaUltimaProposta = ev.CargaId.HasValue ? resolvedorDeCarga(ev.CargaId.Value) : null;
                     if (registroAtivoId == null)
-                    {
                         situacao = StatusDecisao.Proposta;
-                    }
                     break;
 
-                case "DecisionApproved":
-                    registroAtivoId = ev.CargaId ?? propostaPendenteId;
-                    versaoRegistroAtivo = ev.VersaoFluxo;
-                    cargaAtiva = carga ?? (registroAtivoId.HasValue ? resolvedorDeCarga(registroAtivoId.Value) : null);
+                case TiposDeEvento.DecisaoAprovada:
+                    var aprovadaId = ev.CargaId ?? propostaPendenteId;
+                    if (aprovadaId == null)
+                        break; // evento sem proposta associada: ignorado de forma determinística
+                    registroAtivoId = aprovadaId;
+                    // Incrementa versão do registro ativo
+                    versaoRegistroAtivo = (versaoRegistroAtivo ?? 0) + 1;
+                    cargaAtiva = resolvedorDeCarga(aprovadaId.Value);
                     propostaPendenteId = null;
+                    eventoPropostaPendente = null;
                     situacao = StatusDecisao.Ativa;
                     break;
 
-                case "DecisionRejected":
+                case TiposDeEvento.DecisaoRejeitada:
                     propostaPendenteId = null;
+                    eventoPropostaPendente = null;
                     if (registroAtivoId == null)
-                    {
                         situacao = StatusDecisao.Rejeitada;
-                    }
                     break;
 
-                case "DecisionSuperseded":
+                case TiposDeEvento.DecisaoSubstituida:
                     situacao = StatusDecisao.Substituida;
                     break;
             }
         }
 
-        var cargaExibicao = cargaAtiva ?? cargaMaisRecente;
+        var cargaPendente = propostaPendenteId.HasValue ? resolvedorDeCarga(propostaPendenteId.Value) : null;
+        var cargaExibicao = cargaAtiva ?? cargaPendente ?? cargaUltimaProposta;
 
         return new DecisaoReconstituida(
             TopicoId: topicoId,
@@ -84,6 +95,58 @@ public static class RedutorDeDecisao
             ChavesTecnicas: cargaExibicao?.ChavesTecnicas ?? [],
             IncidentesRelacionadosIds: cargaExibicao?.IncidentesRelacionadosIds ?? [],
             Evidencias: cargaExibicao?.Evidencias ?? []
-        );
+        )
+        {
+            CargaPropostaPendente = cargaPendente,
+            EventoPropostaPendente = eventoPropostaPendente
+        };
+    }
+
+    // Converte o estado reconstituído em projeções
+    public static (DecisaoAtual Atual, PropostaPendente? Pendente) Projetar(DecisaoReconstituida estado, DateTimeOffset atualizadoEm)
+    {
+        var atual = new DecisaoAtual(
+            estado.TopicoId,
+            estado.EspacoTrabalhoId,
+            estado.ProjetoId,
+            estado.ChaveTopico,
+            estado.RegistroAtivoId,
+            estado.VersaoRegistroAtivo,
+            estado.VersaoFluxo,
+            estado.Situacao,
+            estado.PropostaPendenteId,
+            estado.Titulo,
+            estado.Resumo,
+            estado.Justificativa,
+            estado.ChavesTecnicas,
+            estado.IncidentesRelacionadosIds,
+            estado.Evidencias,
+            atualizadoEm);
+
+        PropostaPendente? pendente = null;
+        if (estado.PropostaPendenteId.HasValue && estado.CargaPropostaPendente != null && estado.EventoPropostaPendente != null)
+        {
+            var c = estado.CargaPropostaPendente;
+            var ev = estado.EventoPropostaPendente;
+            pendente = new PropostaPendente(
+                estado.TopicoId,
+                estado.EspacoTrabalhoId,
+                estado.ProjetoId,
+                estado.ChaveTopico,
+                estado.VersaoFluxo,
+                estado.PropostaPendenteId.Value,
+                c.Titulo,
+                c.Resumo,
+                c.Justificativa,
+                c.ChavesTecnicas,
+                c.IncidentesRelacionadosIds,
+                c.Evidencias,
+                ev.AutorSujeito,
+                ev.AutorEmissor,
+                ev.ClienteId,
+                ev.RegistradoEm);
+        }
+
+        return (atual, pendente);
     }
 }

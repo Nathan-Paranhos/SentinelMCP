@@ -27,8 +27,8 @@ EXPOSE 5000
 ENV ASPNETCORE_URLS=http://+:5000
 ENV ASPNETCORE_ENVIRONMENT=Production
 
+# Migrações e fixtures SQL já vêm no publish (pasta db/), declaradas como Content no Sentinel.Api.csproj.
 COPY --from=build /app/publish ./
-COPY db/ /app/db/
 
 # Run as non-root user
 USER $APP_UID

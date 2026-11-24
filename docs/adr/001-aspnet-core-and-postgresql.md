@@ -22,3 +22,13 @@ Para ambientes corporativos on-premise e cloud sob demanda de governança e alta
 - Garante forte integridade referencial com chaves compostas incluindo `workspace_id`.
 - Permite uso de transações de leitura determinísticas com snapshot isolation.
 - **Gatilho de revisão**: Se o transporte Streamable HTTP ou a compatibilidade dos clientes de referência exigir adaptações de SSE ou WebSocket legados, reavaliar o middleware de transporte.
+
+## Estado da implementação (2026-11)
+- O runtime é **.NET 9** (`net9.0` em todos os projetos); compatível com .NET 10 via roll-forward.
+- O **SDK oficial MCP para C# foi integrado**: suporte a `ModelContextProtocol.AspNetCore` com transporte HTTP registrado em `/mcp/sse` e compatibilidade total com o endpoint JSON-RPC negociável em `POST /mcp`.
+- Todas as ferramentas publicam `inputSchema` e `outputSchema` no catálogo `tools/list`.
+- Instrumentação com **OpenTelemetry** (Tracing, Métricas do ASP.NET Core, HttpClient, Runtime, contadores de ferramentas MCP e exportador OTLP configurável).
+- API administrativa em `/api/admin/*` para gestão de workspaces, projetos e vínculos protegida por chave de administração (`ADMIN_API_KEY`) ou sessão web autenticada.
+- PostgreSQL com Npgsql e SQL puro, RLS, `tsvector`/GIN e chaves técnicas normalizadas estão implementados (migrações 001 a 003). `pgvector` não é usado.
+- Política de segurança de conteúdo (CSP) estrita em todas as páginas HTML, sem exceções de scripts inline ou CDNs.
+- O compose local usa a imagem `postgres:17-alpine`; os testes de integração usam `postgres:16-alpine` via Testcontainers.

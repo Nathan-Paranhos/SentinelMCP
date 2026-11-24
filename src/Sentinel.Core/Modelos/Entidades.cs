@@ -58,7 +58,11 @@ public sealed record EventoMemoria(
     string? ClienteId,
     Guid? CargaId,
     Guid? EventoReferenciaId
-);
+)
+{
+    // Motivo da rejeição
+    public string? Motivo { get; init; }
+}
 
 public sealed record CargaMemoria(
     Guid CargaId,
@@ -71,6 +75,29 @@ public sealed record CargaMemoria(
     List<Guid> IncidentesRelacionadosIds,
     List<Evidencia> Evidencias,
     DateTimeOffset CriadoEm
+)
+{
+    // Data informada da ocorrência
+    public DateTimeOffset? OcorridoEm { get; init; }
+}
+
+public sealed record PropostaPendente(
+    Guid TopicoId,
+    Guid EspacoTrabalhoId,
+    Guid ProjetoId,
+    string ChaveTopico,
+    int VersaoFluxo,
+    Guid PropostaId,
+    string Titulo,
+    string Resumo,
+    string? Justificativa,
+    List<string> ChavesTecnicas,
+    List<Guid> IncidentesRelacionadosIds,
+    List<Evidencia> Evidencias,
+    string AutorSujeito,
+    string AutorEmissor,
+    string? ClienteId,
+    DateTimeOffset PropostaEm
 );
 
 public sealed record DecisaoAtual(
@@ -123,10 +150,12 @@ public sealed record ReciboConsulta(
     Guid EspacoTrabalhoId,
     Guid ProjetoId,
     string PrincipalId,
+    string? PrincipalEmissor,
     string? ClienteId,
     string ModoBusca,
     DateTimeOffset CriadoEm,
-    List<ItemReciboConsulta> Itens
+    List<ItemReciboConsulta> Itens,
+    string Digest
 );
 
 public sealed record ItemReciboConsulta(
@@ -158,7 +187,12 @@ public sealed record DecisaoReconstituida(
     List<string> ChavesTecnicas,
     List<Guid> IncidentesRelacionadosIds,
     List<Evidencia> Evidencias
-);
+)
+{
+    // Carga e evento da proposta pendente
+    public CargaMemoria? CargaPropostaPendente { get; init; }
+    public EventoMemoria? EventoPropostaPendente { get; init; }
+}
 
 public sealed record IncidenteReconstituido(
     Guid IncidenteId,

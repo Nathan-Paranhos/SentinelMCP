@@ -6,25 +6,18 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
-    name: Build & Test (Unit, Contract & Integration)
+    name: Build & Test (Unit, Contract & Integration com PostgreSQL real)
     runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:17-alpine
-        env:
-          POSTGRES_DB: sentinel_mcp
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgrespassword
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+    env:
+      # Os testes de PostgreSQL usam Testcontainers (Docker do runner). No CI, Docker ausente
+      # deve FALHAR a execução em vez de ignorar os testes silenciosamente.
+      SENTINEL_REQUIRE_DOCKER: "1"
 
     steps:
       - name: Checkout Code
@@ -39,7 +32,7 @@ jobs:
         run: dotnet restore Sentinel.sln
 
       - name: Build Solution
-        run: dotnet build Sentinel.sln --no-restore -c Release
+        run: dotnet build Sentinel.sln --no-restore -c Release -warnaserror
 
       - name: Run Unit Tests
         run: dotnet test tests/Sentinel.UnitTests/Sentinel.UnitTests.csproj --no-build -c Release --logger "console;verbosity=normal"
@@ -47,5 +40,5 @@ jobs:
       - name: Run MCP Contract Tests
         run: dotnet test tests/Sentinel.ContractTests/Sentinel.ContractTests.csproj --no-build -c Release --logger "console;verbosity=normal"
 
-      - name: Run Acceptance Criteria Integration Tests
+      - name: Run Acceptance Criteria Integration Tests (InMemory + PostgreSQL)
         run: dotnet test tests/Sentinel.IntegrationTests/Sentinel.IntegrationTests.csproj --no-build -c Release --logger "console;verbosity=normal"

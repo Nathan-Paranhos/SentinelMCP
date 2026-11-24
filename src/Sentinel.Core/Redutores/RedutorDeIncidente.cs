@@ -17,23 +17,23 @@ public static class RedutorDeIncidente
             .OrderBy(e => e.VersaoFluxo);
 
         int versaoFluxoCorrente = 0;
-        int versaoRegistro = 1;
+        int versaoRegistro = 0;
         var situacao = StatusIncidente.Reportado;
         CargaMemoria? cargaMaisRecente = null;
+        DateTimeOffset? registradoEm = null;
 
         foreach (var ev in eventosFiltrados)
         {
             versaoFluxoCorrente = ev.VersaoFluxo;
-            versaoRegistro = ev.VersaoFluxo;
-            var carga = ev.CargaId.HasValue ? resolvedorDeCarga(ev.CargaId.Value) : null;
-            if (carga != null)
-            {
-                cargaMaisRecente = carga;
-            }
 
-            if (ev.Tipo == "IncidentReported")
+            if (ev.Tipo == TiposDeEvento.IncidenteReportado)
             {
+                versaoRegistro++;
                 situacao = StatusIncidente.Reportado;
+                registradoEm ??= ev.RegistradoEm;
+                var carga = ev.CargaId.HasValue ? resolvedorDeCarga(ev.CargaId.Value) : null;
+                if (carga != null)
+                    cargaMaisRecente = carga;
             }
         }
 
@@ -42,13 +42,28 @@ public static class RedutorDeIncidente
             EspacoTrabalhoId: espacoTrabalhoId,
             ProjetoId: projetoId,
             VersaoFluxo: versaoFluxoCorrente,
-            VersaoRegistro: versaoRegistro,
+            VersaoRegistro: Math.Max(versaoRegistro, versaoFluxoCorrente > 0 ? 1 : 0),
             Situacao: situacao,
             Titulo: cargaMaisRecente?.Titulo ?? string.Empty,
             Resumo: cargaMaisRecente?.Resumo ?? string.Empty,
-            OcorridoEm: cargaMaisRecente?.CriadoEm ?? DateTimeOffset.UtcNow,
+            // Data do incidente obtida do payload
+            OcorridoEm: cargaMaisRecente?.OcorridoEm ?? registradoEm ?? cargaMaisRecente?.CriadoEm ?? DateTimeOffset.UnixEpoch,
             ChavesTecnicas: cargaMaisRecente?.ChavesTecnicas ?? [],
             Evidencias: cargaMaisRecente?.Evidencias ?? []
         );
     }
+
+    public static IncidenteAtual Projetar(IncidenteReconstituido estado, DateTimeOffset criadoEm) => new(
+        estado.IncidenteId,
+        estado.EspacoTrabalhoId,
+        estado.ProjetoId,
+        estado.VersaoRegistro,
+        estado.VersaoFluxo,
+        estado.Situacao,
+        estado.Titulo,
+        estado.Resumo,
+        estado.OcorridoEm,
+        estado.ChavesTecnicas,
+        estado.Evidencias,
+        criadoEm);
 }

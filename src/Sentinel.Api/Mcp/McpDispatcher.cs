@@ -1,242 +1,159 @@
+using System.Globalization;
 using System.Text.Json;
 using Sentinel.Api.Auth;
-using Sentinel.Core.Comandos;
+using Sentinel.Api.Operacao;
+using Sentinel.Core.CasosDeUso;
 using Sentinel.Core.Consultas;
 using Sentinel.Core.Excecoes;
 using Sentinel.Core.Modelos;
-using Sentinel.Core.Redutores;
-using Sentinel.Persistence.Contratos;
 
 namespace Sentinel.Api.Mcp;
 
+// Despachante de ferramentas MCP
 public sealed class McpDispatcher
 {
-    private readonly IServicoIdentidade _servicoIdentidade;
-    private readonly IRepositorioEspacoTrabalho _repositorioEspacoTrabalho;
-    private readonly IRepositorioDecisao _repositorioDecisao;
-    private readonly IRepositorioIncidente _repositorioIncidente;
-    private readonly IRepositorioContexto _repositorioContexto;
+    private static readonly HashSet<string> Ferramentas =
+        ["propose_decision", "log_incident", "query_context", "get_timeline", "get_context_receipt"];
 
-    public McpDispatcher(
-        IServicoIdentidade servicoIdentidade,
-        IRepositorioEspacoTrabalho repositorioEspacoTrabalho,
-        IRepositorioDecisao repositorioDecisao,
-        IRepositorioIncidente repositorioIncidente,
-        IRepositorioContexto repositorioContexto)
+    private readonly ServicoDeMemoria _servico;
+    private readonly ILogger<McpDispatcher> _log;
+
+    public McpDispatcher(ServicoDeMemoria servico, ILogger<McpDispatcher> log)
     {
-        _servicoIdentidade = servicoIdentidade;
-        _repositorioEspacoTrabalho = repositorioEspacoTrabalho;
-        _repositorioDecisao = repositorioDecisao;
-        _repositorioIncidente = repositorioIncidente;
-        _repositorioContexto = repositorioContexto;
+        _servico = servico;
+        _log = log;
     }
 
-    public async Task<McpToolResult> CallToolAsync(
-        string toolName,
-        JsonElement arguments,
-        HttpContext contextoHttp,
-        CancellationToken ct = default)
+    public static bool Existe(string nome) => Ferramentas.Contains(nome);
+
+    public async Task<McpToolResult> CallToolAsync(string nome, JsonElement argumentos, IdentidadeAgente identidade, string idCorrelacao, CancellationToken ct = default)
     {
+        using var atividade = SentinelDiagnostics.ActivitySource.StartActivity($"mcp.tool.{nome}");
+        atividade?.SetTag("mcp.tool.name", nome);
+        atividade?.SetTag("mcp.actor.subject", identidade.Ator.Sujeito);
+        atividade?.SetTag("mcp.actor.client_id", identidade.Ator.ClienteId);
+
         try
         {
-            return toolName switch
+            if (argumentos.ValueKind != JsonValueKind.Object)
+                throw new ExcecaoDeValidacao("'arguments' deve ser um objeto JSON.");
+
+            var args = new LeitorDeArgumentos(argumentos);
+            var resultado = nome switch
             {
-                "propose_decision" => await TratarProporDecisaoAsync(arguments, contextoHttp, ct),
-                "log_incident" => await TratarRegistrarIncidenteAsync(arguments, contextoHttp, ct),
-                "query_context" => await TratarConsultarContextoAsync(arguments, contextoHttp, ct),
-                "get_timeline" => await TratarObterLinhaDoTempoAsync(arguments, contextoHttp, ct),
-                "get_context_receipt" => await TratarObterComprovanteContextoAsync(arguments, contextoHttp, ct),
-                _ => McpToolResult.Error("NOT_FOUND", $"A ferramenta '{toolName}' não foi reconhecida.")
+                "propose_decision" => await ProporDecisaoAsync(args, identidade, ct),
+                "log_incident" => await RegistrarIncidenteAsync(args, identidade, ct),
+                "query_context" => await ConsultarContextoAsync(args, identidade, ct),
+                "get_timeline" => await ObterLinhaDoTempoAsync(args, identidade, ct),
+                "get_context_receipt" => await ObterComprovanteAsync(args, identidade, ct),
+                _ => throw new ExcecaoDeNaoEncontrado($"Ferramenta '{nome}' não reconhecida.")
             };
+
+            SentinelDiagnostics.McpToolExecutions.Add(1,
+                new KeyValuePair<string, object?>("tool", nome),
+                new KeyValuePair<string, object?>("status", resultado.IsError ? "error" : "success"));
+
+            _log.LogInformation("Tool MCP {Ferramenta} executada por {Sujeito} ({Cliente})", nome, identidade.Ator.Sujeito, identidade.Ator.ClienteId);
+            return resultado;
         }
         catch (ExcecaoDeConflitoDeVersao ex)
         {
+            SentinelDiagnostics.McpToolErrors.Add(1,
+                new KeyValuePair<string, object?>("tool", nome),
+                new KeyValuePair<string, object?>("code", ex.Codigo));
             return McpToolResult.Error(ex.Codigo, ex.Message, new
             {
-                topicoId = ex.TopicoId,
-                versaoEsperada = ex.VersaoEsperada,
-                versaoAtual = ex.VersaoAtual
+                topicId = ex.TopicoId,
+                expectedVersion = ex.VersaoEsperada,
+                currentVersion = ex.VersaoAtual
             });
+        }
+        catch (ExcecaoDePropostaPendente ex)
+        {
+            SentinelDiagnostics.McpToolErrors.Add(1,
+                new KeyValuePair<string, object?>("tool", nome),
+                new KeyValuePair<string, object?>("code", ex.Codigo));
+            return McpToolResult.Error(ex.Codigo, ex.Message, new { topicId = ex.TopicoId, pendingProposalId = ex.PropostaPendenteId });
         }
         catch (ExcecaoDeDominio ex)
         {
+            SentinelDiagnostics.McpToolErrors.Add(1,
+                new KeyValuePair<string, object?>("tool", nome),
+                new KeyValuePair<string, object?>("code", ex.Codigo));
+            _log.LogInformation("Tool MCP {Ferramenta} recusada para {Sujeito}: {Codigo}", nome, identidade.Ator.Sujeito, ex.Codigo);
             return McpToolResult.Error(ex.Codigo, ex.Message);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
-            return McpToolResult.Error("INTERNAL_ERROR", ex.Message);
+            SentinelDiagnostics.McpToolErrors.Add(1,
+                new KeyValuePair<string, object?>("tool", nome),
+                new KeyValuePair<string, object?>("code", "INTERNAL_ERROR"));
+            // Registra erro interno com ID de correlação
+            _log.LogError(ex, "Falha inesperada na tool MCP {Ferramenta} (correlação {Correlacao})", nome, idCorrelacao);
+            return McpToolResult.Error("INTERNAL_ERROR", $"Erro interno. ID de correlação: {idCorrelacao}.");
         }
     }
 
-    private async Task<McpToolResult> TratarProporDecisaoAsync(JsonElement args, HttpContext contextoHttp, CancellationToken ct)
+    private static object Evidencias(IEnumerable<Evidencia> evidencias) =>
+        evidencias.Select(e => new { type = e.Tipo, label = e.Rotulo, url = e.Url }).ToList();
+
+    private async Task<McpToolResult> ProporDecisaoAsync(LeitorDeArgumentos a, IdentidadeAgente identidade, CancellationToken ct)
     {
-        var espacoTrabalhoId = args.GetProperty("workspaceId").GetGuid();
-        var projetoId = args.GetProperty("projectId").GetGuid();
+        identidade.ExigirEscopo(Escopos.EscreverDecisao);
+        var entrada = new EntradaProporDecisao(
+            a.Guid("workspaceId"), a.Guid("projectId"), a.Texto("topicKey"), a.Inteiro("expectedVersion"),
+            a.Texto("title"), a.Texto("summary"), a.TextoOpcional("rationale"),
+            a.ListaTextos("technicalKeys"), a.ListaGuids("relatedIncidentIds"), a.Evidencias("evidence"),
+            a.Texto("idempotencyKey"));
 
-        await _servicoIdentidade.AutenticarEAutorizarAsync(
-            contextoHttp, espacoTrabalhoId, "write:decision", PapelUsuario.Contributor, ct);
-        var identidade = _servicoIdentidade.ResolverIdentidade(contextoHttp);
-
-        var projeto = await _repositorioEspacoTrabalho.ObterProjetoAsync(espacoTrabalhoId, projetoId, ct);
-        if (projeto == null)
-            throw new ExcecaoDeNaoEncontrado($"Projeto '{projetoId}' não encontrado no espaço de trabalho.");
-
-        var chaveTopico = args.GetProperty("topicKey").GetString() ?? string.Empty;
-        var versaoEsperada = args.GetProperty("expectedVersion").GetInt32();
-        var titulo = args.GetProperty("title").GetString() ?? string.Empty;
-        var resumo = args.GetProperty("summary").GetString() ?? string.Empty;
-        var justificativa = args.TryGetProperty("rationale", out var ratElem) ? ratElem.GetString() : null;
-
-        List<string>? chavesTecnicas = null;
-        if (args.TryGetProperty("technicalKeys", out var tkElem) && tkElem.ValueKind == JsonValueKind.Array)
-        {
-            chavesTecnicas = tkElem.EnumerateArray().Select(x => x.GetString()!).Where(x => !string.IsNullOrEmpty(x)).ToList();
-        }
-
-        List<Guid>? incidentesRelacionados = null;
-        if (args.TryGetProperty("relatedIncidentIds", out var incElem) && incElem.ValueKind == JsonValueKind.Array)
-        {
-            incidentesRelacionados = incElem.EnumerateArray().Select(x => x.GetGuid()).ToList();
-        }
-
-        var evidencias = new List<Evidencia>();
-        if (args.TryGetProperty("evidence", out var evElem) && evElem.ValueKind == JsonValueKind.Array)
-        {
-            evidencias = evElem.EnumerateArray().Select(e => new Evidencia(
-                e.GetProperty("type").GetString() ?? string.Empty,
-                e.GetProperty("label").GetString() ?? string.Empty,
-                e.GetProperty("url").GetString() ?? string.Empty
-            )).ToList();
-        }
-
-        var chaveIdempotencia = args.GetProperty("idempotencyKey").GetString() ?? string.Empty;
-
-        var comando = new ComandoProporDecisao(
-            EspacoTrabalhoId: espacoTrabalhoId,
-            ProjetoId: projetoId,
-            ChaveTopico: chaveTopico,
-            VersaoEsperada: versaoEsperada,
-            Titulo: titulo,
-            Resumo: resumo,
-            Justificativa: justificativa,
-            ChavesTecnicas: chavesTecnicas,
-            IncidentesRelacionadosIds: incidentesRelacionados,
-            Evidencias: evidencias,
-            ChaveIdempotencia: chaveIdempotencia,
-            AutorSujeito: identidade.Sujeito,
-            AutorEmissor: identidade.Emissor,
-            ClienteId: identidade.ClienteId
-        );
-
-        var resultado = await _repositorioDecisao.ProporDecisaoAsync(comando, ct);
+        var r = await _servico.ProporDecisaoAsync(identidade.Ator, entrada, ct);
         return McpToolResult.Success(new
         {
-            topicId = resultado.TopicoId,
-            proposalId = resultado.PropostaId,
-            streamVersion = resultado.VersaoFluxo,
-            status = resultado.Situacao
-        }, $"Proposta de decisão criada para o tópico '{chaveTopico}'. Proposta ID: {resultado.PropostaId}, versão do fluxo: {resultado.VersaoFluxo}.");
+            topicId = r.TopicoId,
+            proposalId = r.PropostaId,
+            streamVersion = r.VersaoFluxo,
+            status = r.Situacao
+        }, $"Proposta registrada no tópico '{entrada.ChaveTopico}' (proposta {r.PropostaId}, versão {r.VersaoFluxo}). Aguarda aprovação humana.");
     }
 
-    private async Task<McpToolResult> TratarRegistrarIncidenteAsync(JsonElement args, HttpContext contextoHttp, CancellationToken ct)
+    private async Task<McpToolResult> RegistrarIncidenteAsync(LeitorDeArgumentos a, IdentidadeAgente identidade, CancellationToken ct)
     {
-        var espacoTrabalhoId = args.GetProperty("workspaceId").GetGuid();
-        var projetoId = args.GetProperty("projectId").GetGuid();
+        identidade.ExigirEscopo(Escopos.EscreverIncidente);
+        var entrada = new EntradaRegistrarIncidente(
+            a.Guid("workspaceId"), a.Guid("projectId"), a.Texto("title"), a.Texto("summary"),
+            a.DataOpcional("occurredAt"), a.ListaTextos("technicalKeys"), a.Evidencias("evidence"), a.Texto("idempotencyKey"));
 
-        await _servicoIdentidade.AutenticarEAutorizarAsync(
-            contextoHttp, espacoTrabalhoId, "write:incident", PapelUsuario.Contributor, ct);
-        var identidade = _servicoIdentidade.ResolverIdentidade(contextoHttp);
-
-        var projeto = await _repositorioEspacoTrabalho.ObterProjetoAsync(espacoTrabalhoId, projetoId, ct);
-        if (projeto == null)
-            throw new ExcecaoDeNaoEncontrado($"Projeto '{projetoId}' não encontrado no espaço de trabalho.");
-
-        var titulo = args.GetProperty("title").GetString() ?? string.Empty;
-        var resumo = args.GetProperty("summary").GetString() ?? string.Empty;
-        DateTimeOffset? ocorridoEm = args.TryGetProperty("occurredAt", out var occElem) && occElem.ValueKind == JsonValueKind.String
-            ? occElem.GetDateTimeOffset()
-            : null;
-
-        List<string>? chavesTecnicas = null;
-        if (args.TryGetProperty("technicalKeys", out var tkElem) && tkElem.ValueKind == JsonValueKind.Array)
-        {
-            chavesTecnicas = tkElem.EnumerateArray().Select(x => x.GetString()!).Where(x => !string.IsNullOrEmpty(x)).ToList();
-        }
-
-        var evidencias = new List<Evidencia>();
-        if (args.TryGetProperty("evidence", out var evElem) && evElem.ValueKind == JsonValueKind.Array)
-        {
-            evidencias = evElem.EnumerateArray().Select(e => new Evidencia(
-                e.GetProperty("type").GetString() ?? string.Empty,
-                e.GetProperty("label").GetString() ?? string.Empty,
-                e.GetProperty("url").GetString() ?? string.Empty
-            )).ToList();
-        }
-
-        var chaveIdempotencia = args.GetProperty("idempotencyKey").GetString() ?? string.Empty;
-
-        var comando = new ComandoRegistrarIncidente(
-            EspacoTrabalhoId: espacoTrabalhoId,
-            ProjetoId: projetoId,
-            Titulo: titulo,
-            Resumo: resumo,
-            OcorridoEm: ocorridoEm,
-            ChavesTecnicas: chavesTecnicas,
-            Evidencias: evidencias,
-            ChaveIdempotencia: chaveIdempotencia,
-            AutorSujeito: identidade.Sujeito,
-            AutorEmissor: identidade.Emissor,
-            ClienteId: identidade.ClienteId
-        );
-
-        var resultado = await _repositorioIncidente.RegistrarIncidenteAsync(comando, ct);
+        var r = await _servico.RegistrarIncidenteAsync(identidade.Ator, entrada, ct);
         return McpToolResult.Success(new
         {
-            incidentId = resultado.IncidenteId,
-            streamVersion = resultado.VersaoFluxo,
-            status = resultado.Situacao
-        }, $"Incidente registrado com sucesso com o ID {resultado.IncidenteId}, versão {resultado.VersaoFluxo}.");
+            incidentId = r.IncidenteId,
+            streamVersion = r.VersaoFluxo,
+            status = r.Situacao
+        }, $"Incidente {r.IncidenteId} registrado (versão {r.VersaoFluxo}).");
     }
 
-    private async Task<McpToolResult> TratarConsultarContextoAsync(JsonElement args, HttpContext contextoHttp, CancellationToken ct)
+    private async Task<McpToolResult> ConsultarContextoAsync(LeitorDeArgumentos a, IdentidadeAgente identidade, CancellationToken ct)
     {
-        var espacoTrabalhoId = args.GetProperty("workspaceId").GetGuid();
-        var projetoId = args.GetProperty("projectId").GetGuid();
+        identidade.ExigirEscopo(Escopos.LerMemoria);
+        var entrada = new EntradaConsultarContexto(
+            a.Guid("workspaceId"), a.Guid("projectId"), a.Texto("query"),
+            a.TextoOpcional("kind") ?? "decision", a.InteiroOpcional("limit") ?? 10);
 
-        await _servicoIdentidade.AutenticarEAutorizarAsync(
-            contextoHttp, espacoTrabalhoId, "read:memory", PapelUsuario.Reader, ct);
-        var identidade = _servicoIdentidade.ResolverIdentidade(contextoHttp);
+        var r = await _servico.ConsultarContextoAsync(identidade.Ator, entrada, ct);
+        var resumo = r.Itens.Count == 0
+            ? $"Nenhum registro encontrado para '{entrada.TermoBusca}'. Comprovante: {r.ConsultaId}."
+            : $"{r.Itens.Count} registro(s) encontrado(s). Comprovante: {r.ConsultaId}.";
 
-        var projeto = await _repositorioEspacoTrabalho.ObterProjetoAsync(espacoTrabalhoId, projetoId, ct);
-        if (projeto == null)
-            throw new ExcecaoDeNaoEncontrado($"Projeto '{projetoId}' não encontrado no espaço de trabalho.");
-
-        var termoBusca = args.GetProperty("query").GetString() ?? string.Empty;
-        var tipoRegistro = args.TryGetProperty("kind", out var kindElem) ? (kindElem.GetString() ?? "decision") : "decision";
-        var limite = args.TryGetProperty("limit", out var limElem) ? limElem.GetInt32() : 10;
-
-        var consulta = new ConsultaContexto(
-            EspacoTrabalhoId: espacoTrabalhoId,
-            ProjetoId: projetoId,
-            TermoBusca: termoBusca,
-            TipoRegistro: tipoRegistro,
-            Limite: limite,
-            PrincipalId: identidade.Sujeito,
-            ClienteId: identidade.ClienteId
-        );
-
-        var resultado = await _repositorioContexto.ConsultarContextoAsync(consulta, ct);
-
-        var resumoTexto = resultado.Itens.Count == 0
-            ? $"Nenhum registro de {tipoRegistro} encontrado para a busca '{termoBusca}'."
-            : $"Encontrado(s) {resultado.Itens.Count} registro(s) de {tipoRegistro}. Comprovante da consulta: {resultado.ConsultaId}.";
-
-        var payloadResultado = new
+        return McpToolResult.Success(new
         {
-            queryId = resultado.ConsultaId,
-            matchStatus = resultado.StatusCorrespondencia,
-            searchMode = resultado.ModoBusca,
-            items = resultado.Itens.Select(i => new
+            queryId = r.ConsultaId,
+            matchStatus = r.StatusCorrespondencia,
+            searchMode = r.ModoBusca,
+            items = r.Itens.Select(i => new
             {
                 recordType = i.TipoRegistro,
                 topicId = i.TopicoId,
@@ -247,45 +164,65 @@ public sealed class McpDispatcher
                 status = i.Situacao,
                 title = i.Titulo,
                 summary = i.Resumo,
-                evidence = i.Evidencias
+                evidence = Evidencias(i.Evidencias)
             }).ToList()
-        };
-
-        return McpToolResult.Success(payloadResultado, resumoTexto);
+        }, resumo);
     }
 
-    private async Task<McpToolResult> TratarObterLinhaDoTempoAsync(JsonElement args, HttpContext contextoHttp, CancellationToken ct)
+    private async Task<McpToolResult> ObterLinhaDoTempoAsync(LeitorDeArgumentos a, IdentidadeAgente identidade, CancellationToken ct)
     {
-        var espacoTrabalhoId = args.GetProperty("workspaceId").GetGuid();
-        var projetoId = args.GetProperty("projectId").GetGuid();
+        identidade.ExigirEscopo(Escopos.LerMemoria);
+        var consulta = new ConsultaLinhaDoTempo(
+            a.Guid("workspaceId"), a.Guid("projectId"), a.Texto("kind") ?? string.Empty, a.Guid("streamId"),
+            a.InteiroOpcional("atVersion"), a.InteiroOpcional("beforeVersion"), a.InteiroOpcional("limit") ?? 20);
 
-        await _servicoIdentidade.AutenticarEAutorizarAsync(
-            contextoHttp, espacoTrabalhoId, "read:memory", PapelUsuario.Reader, ct);
+        var r = await _servico.ObterLinhaDoTempoAsync(identidade.Ator, consulta, ct);
 
-        var projeto = await _repositorioEspacoTrabalho.ObterProjetoAsync(espacoTrabalhoId, projetoId, ct);
-        if (projeto == null)
-            throw new ExcecaoDeNaoEncontrado($"Projeto '{projetoId}' não encontrado no espaço de trabalho.");
+        object estado = r.EstadoDecisao is { } d
+            ? (object)new
+            {
+                topicId = d.TopicoId,
+                workspaceId = d.EspacoTrabalhoId,
+                projectId = d.ProjetoId,
+                topicKey = d.ChaveTopico,
+                streamVersion = d.VersaoFluxo,
+                activeRecordId = d.RegistroAtivoId,
+                activeRecordVersion = d.VersaoRegistroAtivo,
+                status = d.Situacao.ParaTexto(),
+                pendingProposalId = d.PropostaPendenteId,
+                title = d.Titulo,
+                summary = d.Resumo,
+                rationale = d.Justificativa,
+                technicalKeys = d.ChavesTecnicas,
+                relatedIncidentIds = d.IncidentesRelacionadosIds,
+                evidence = Evidencias(d.Evidencias)
+            }
+            : r.EstadoIncidente is { } i
+                ? (object)new
+                {
+                    incidentId = i.IncidenteId,
+                    workspaceId = i.EspacoTrabalhoId,
+                    projectId = i.ProjetoId,
+                    streamVersion = i.VersaoFluxo,
+                    recordVersion = i.VersaoRegistro,
+                    status = i.Situacao.ParaTexto(),
+                    title = i.Titulo,
+                    summary = i.Resumo,
+                    occurredAt = i.OcorridoEm,
+                    technicalKeys = i.ChavesTecnicas,
+                    evidence = Evidencias(i.Evidencias)
+                }
+                : (object)new { };
 
-        var tipo = args.GetProperty("kind").GetString() ?? "decision";
-        var fluxoId = args.GetProperty("streamId").GetGuid();
-        int? naVersao = args.TryGetProperty("atVersion", out var atElem) && atElem.ValueKind == JsonValueKind.Number ? atElem.GetInt32() : null;
-        int? antesDaVersao = args.TryGetProperty("beforeVersion", out var bElem) && bElem.ValueKind == JsonValueKind.Number ? bElem.GetInt32() : null;
-        int limite = args.TryGetProperty("limit", out var lElem) && lElem.ValueKind == JsonValueKind.Number ? lElem.GetInt32() : 20;
-
-        if (string.Equals(tipo, "decision", StringComparison.OrdinalIgnoreCase))
+        var situacao = r.EstadoDecisao?.Situacao.ParaTexto() ?? r.EstadoIncidente?.Situacao.ParaTexto();
+        return McpToolResult.Success(new
         {
-            var topico = await _repositorioDecisao.ObterTopicoPorIdAsync(espacoTrabalhoId, projetoId, fluxoId, ct);
-            if (topico == null)
-                throw new ExcecaoDeNaoEncontrado($"Tópico de decisão '{fluxoId}' não encontrado no espaço de trabalho.");
-
-            var eventos = await _repositorioDecisao.ObterEventosPorFluxoAsync(espacoTrabalhoId, fluxoId, naVersao, antesDaVersao, limite, ct);
-            var reconstituido = RedutorDeDecisao.Reconstituir(
-                topico.TopicoId, espacoTrabalhoId, projetoId, topico.ChaveTopico, eventos,
-                pid => _repositorioDecisao.ObterCargaAsync(espacoTrabalhoId, pid, ct).GetAwaiter().GetResult(),
-                naVersao
-            );
-
-            var itensEventos = eventos.Select(e => new
+            kind = r.TipoRegistro,
+            streamId = r.FluxoId,
+            currentStreamVersion = r.VersaoFluxoAtual,
+            targetVersion = r.VersaoAlvo,
+            reconstitutedState = estado,
+            events = r.Eventos.Select(e => new
             {
                 eventId = e.EventoId,
                 streamVersion = e.VersaoFluxo,
@@ -293,123 +230,34 @@ public sealed class McpDispatcher
                 recordedAt = e.RegistradoEm,
                 authorSubject = e.AutorSujeito,
                 clientId = e.ClienteId,
-                payloadId = e.CargaId
-            }).ToList();
-
-            var versaoAlvo = naVersao ?? topico.VersaoAtual;
-            var resultado = new
-            {
-                streamId = fluxoId,
-                currentStreamVersion = topico.VersaoAtual,
-                targetVersion = versaoAlvo,
-                reconstitutedState = new
-                {
-                    topicId = reconstituido.TopicoId,
-                    workspaceId = reconstituido.EspacoTrabalhoId,
-                    projectId = reconstituido.ProjetoId,
-                    topicKey = reconstituido.ChaveTopico,
-                    streamVersion = reconstituido.VersaoFluxo,
-                    activeRecordId = reconstituido.RegistroAtivoId,
-                    activeRecordVersion = reconstituido.VersaoRegistroAtivo,
-                    status = reconstituido.Situacao.ToString().ToLowerInvariant(),
-                    pendingProposalId = reconstituido.PropostaPendenteId,
-                    title = reconstituido.Titulo,
-                    summary = reconstituido.Resumo,
-                    justification = reconstituido.Justificativa,
-                    technicalKeys = reconstituido.ChavesTecnicas,
-                    relatedIncidentIds = reconstituido.IncidentesRelacionadosIds,
-                    evidence = reconstituido.Evidencias
-                },
-                events = itensEventos,
-                nextBeforeVersion = eventos.Count == limite ? eventos.Last().VersaoFluxo : (int?)null
-            };
-
-            return McpToolResult.Success(resultado, $"Linha do tempo da decisão '{topico.ChaveTopico}' na versão {versaoAlvo}. Situação: {reconstituido.Situacao}.");
-        }
-        else if (string.Equals(tipo, "incident", StringComparison.OrdinalIgnoreCase))
-        {
-            var incidente = await _repositorioIncidente.ObterIncidentePorIdAsync(espacoTrabalhoId, projetoId, fluxoId, ct);
-            if (incidente == null)
-                throw new ExcecaoDeNaoEncontrado($"Fluxo de incidente '{fluxoId}' não encontrado no espaço de trabalho.");
-
-            var eventos = await _repositorioIncidente.ObterEventosPorFluxoAsync(espacoTrabalhoId, fluxoId, naVersao, antesDaVersao, limite, ct);
-            var reconstituido = RedutorDeIncidente.Reconstituir(
-                incidente.IncidenteId, espacoTrabalhoId, projetoId, eventos,
-                pid => _repositorioIncidente.ObterCargaAsync(espacoTrabalhoId, pid, ct).GetAwaiter().GetResult(),
-                naVersao
-            );
-
-            var itensEventos = eventos.Select(e => new
-            {
-                eventId = e.EventoId,
-                streamVersion = e.VersaoFluxo,
-                type = e.Tipo,
-                recordedAt = e.RegistradoEm,
-                authorSubject = e.AutorSujeito,
-                clientId = e.ClienteId,
-                payloadId = e.CargaId
-            }).ToList();
-
-            var versaoAlvo = naVersao ?? incidente.VersaoAtual;
-            var resultado = new
-            {
-                streamId = fluxoId,
-                currentStreamVersion = incidente.VersaoAtual,
-                targetVersion = versaoAlvo,
-                reconstitutedState = new
-                {
-                    incidentId = reconstituido.IncidenteId,
-                    workspaceId = reconstituido.EspacoTrabalhoId,
-                    projectId = reconstituido.ProjetoId,
-                    streamVersion = reconstituido.VersaoFluxo,
-                    recordVersion = reconstituido.VersaoRegistro,
-                    status = reconstituido.Situacao.ToString().ToLowerInvariant(),
-                    title = reconstituido.Titulo,
-                    summary = reconstituido.Resumo,
-                    occurredAt = reconstituido.OcorridoEm,
-                    technicalKeys = reconstituido.ChavesTecnicas,
-                    evidence = reconstituido.Evidencias
-                },
-                events = itensEventos,
-                nextBeforeVersion = eventos.Count == limite ? eventos.Last().VersaoFluxo : (int?)null
-            };
-
-            return McpToolResult.Success(resultado, $"Linha do tempo do incidente '{incidente.IncidenteId}'. Situação: {reconstituido.Situacao}.");
-        }
-
-        throw new ExcecaoDeValidacao($"Tipo '{tipo}' não suportado. Esperado 'decision' ou 'incident'.");
+                payloadId = e.CargaId,
+                refEventId = e.EventoReferenciaId,
+                reason = e.Motivo
+            }).ToList(),
+            nextBeforeVersion = r.ProximaVersaoAnterior
+        }, $"Linha do tempo de {r.TipoRegistro} {r.FluxoId} na versão {r.VersaoAlvo} (atual {r.VersaoFluxoAtual}). Situação: {situacao}.");
     }
 
-    private async Task<McpToolResult> TratarObterComprovanteContextoAsync(JsonElement args, HttpContext contextoHttp, CancellationToken ct)
+    private async Task<McpToolResult> ObterComprovanteAsync(LeitorDeArgumentos a, IdentidadeAgente identidade, CancellationToken ct)
     {
-        var espacoTrabalhoId = args.GetProperty("workspaceId").GetGuid();
-        var projetoId = args.GetProperty("projectId").GetGuid();
-        var consultaId = args.GetProperty("queryId").GetGuid();
+        identidade.ExigirEscopo(Escopos.LerMemoria);
+        var c = await _servico.ObterComprovanteAsync(identidade.Ator, a.Guid("workspaceId"), a.Guid("projectId"), a.Guid("queryId"), ct);
 
-        await _servicoIdentidade.AutenticarEAutorizarAsync(
-            contextoHttp, espacoTrabalhoId, "read:memory", PapelUsuario.Reader, ct);
-        var identidade = _servicoIdentidade.ResolverIdentidade(contextoHttp);
-
-        var projeto = await _repositorioEspacoTrabalho.ObterProjetoAsync(espacoTrabalhoId, projetoId, ct);
-        if (projeto == null)
-            throw new ExcecaoDeNaoEncontrado($"Projeto '{projetoId}' não encontrado no espaço de trabalho.");
-
-        var comprovante = await _repositorioContexto.ObterComprovanteContextoAsync(espacoTrabalhoId, projetoId, consultaId, identidade.Sujeito, ct);
-
-        var payloadResultado = new
+        return McpToolResult.Success(new
         {
-            queryId = comprovante.ConsultaId,
-            workspaceId = comprovante.EspacoTrabalhoId,
-            projectId = comprovante.ProjetoId,
-            principalId = comprovante.PrincipalId,
-            clientId = comprovante.ClienteId,
-            searchMode = comprovante.ModoBusca,
-            createdAt = comprovante.CriadoEm,
-            items = comprovante.Itens.Select(i => new
+            queryId = c.ConsultaId,
+            workspaceId = c.EspacoTrabalhoId,
+            projectId = c.ProjetoId,
+            principalId = c.PrincipalId,
+            principalIssuer = c.PrincipalEmissor,
+            clientId = c.ClienteId,
+            searchMode = c.ModoBusca,
+            createdAt = c.CriadoEm,
+            digest = c.Digest,
+            digestAlgorithm = "sha256",
+            integrityVerified = c.IntegridadeVerificada,
+            items = c.Itens.Select(i => new
             {
-                receiptItemId = i.ItemReciboId,
-                queryId = i.ConsultaId,
-                workspaceId = i.EspacoTrabalhoId,
                 position = i.Posicao,
                 recordType = i.TipoRegistro,
                 streamId = i.FluxoId,
@@ -418,8 +266,104 @@ public sealed class McpDispatcher
                 streamVersion = i.VersaoFluxo,
                 status = i.Situacao
             }).ToList()
-        };
+        }, $"Comprovante {c.ConsultaId}: {c.Itens.Count} referência(s); integridade {(c.IntegridadeVerificada ? "verificada" : "NÃO verificada")}.");
+    }
+}
 
-        return McpToolResult.Success(payloadResultado, $"Comprovante {comprovante.ConsultaId} contém {comprovante.Itens.Count} referência(s) verificada(s).");
+// Leitor tipado de argumentos JSON
+internal sealed class LeitorDeArgumentos
+{
+    private readonly JsonElement _raiz;
+
+    public LeitorDeArgumentos(JsonElement raiz) => _raiz = raiz;
+
+    private JsonElement? Obter(string nome) =>
+        _raiz.TryGetProperty(nome, out var v) && v.ValueKind != JsonValueKind.Null ? v : null;
+
+    private static ExcecaoDeValidacao Erro(string nome, string esperado) =>
+        new($"Argumento '{nome}' inválido: esperado {esperado}.");
+
+    public Guid Guid(string nome)
+    {
+        var v = Obter(nome) ?? throw new ExcecaoDeValidacao($"Argumento obrigatório ausente: '{nome}'.");
+        if (v.ValueKind != JsonValueKind.String || !System.Guid.TryParse(v.GetString(), out var g))
+            throw Erro(nome, "UUID");
+        return g;
+    }
+
+    // Lê campo de texto opcional
+    public string? Texto(string nome)
+    {
+        var v = Obter(nome);
+        if (v == null) return null;
+        if (v.Value.ValueKind != JsonValueKind.String) throw Erro(nome, "string");
+        return LerTexto(v.Value, nome);
+    }
+
+    // Lê texto validando UTF-8
+    private static string LerTexto(JsonElement elemento, string nome)
+    {
+        try
+        {
+            return elemento.GetString() ?? string.Empty;
+        }
+        catch (InvalidOperationException)
+        {
+            throw Erro(nome, "texto UTF-8 válido");
+        }
+    }
+
+    public string? TextoOpcional(string nome) => Texto(nome);
+
+    public int Inteiro(string nome) =>
+        InteiroOpcional(nome) ?? throw new ExcecaoDeValidacao($"Argumento obrigatório ausente: '{nome}'.");
+
+    public int? InteiroOpcional(string nome)
+    {
+        var v = Obter(nome);
+        if (v == null) return null;
+        if (v.Value.ValueKind != JsonValueKind.Number || !v.Value.TryGetInt32(out var i)) throw Erro(nome, "inteiro");
+        return i;
+    }
+
+    public DateTimeOffset? DataOpcional(string nome)
+    {
+        var v = Obter(nome);
+        if (v == null) return null;
+        if (v.Value.ValueKind != JsonValueKind.String ||
+            !DateTimeOffset.TryParse(v.Value.GetString(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var d))
+            throw Erro(nome, "data ISO-8601");
+        return d;
+    }
+
+    public List<string>? ListaTextos(string nome)
+    {
+        var v = Obter(nome);
+        if (v == null) return null;
+        if (v.Value.ValueKind != JsonValueKind.Array) throw Erro(nome, "array de strings");
+        return v.Value.EnumerateArray().Select(x => x.ValueKind == JsonValueKind.String ? LerTexto(x, nome) : throw Erro(nome, "array de strings")).ToList();
+    }
+
+    public List<Guid>? ListaGuids(string nome)
+    {
+        var v = Obter(nome);
+        if (v == null) return null;
+        if (v.Value.ValueKind != JsonValueKind.Array) throw Erro(nome, "array de UUIDs");
+        return v.Value.EnumerateArray()
+            .Select(x => x.ValueKind == JsonValueKind.String && System.Guid.TryParse(x.GetString(), out var g) ? g : throw Erro(nome, "array de UUIDs"))
+            .ToList();
+    }
+
+    public List<Evidencia>? Evidencias(string nome)
+    {
+        var v = Obter(nome);
+        if (v == null) return null;
+        if (v.Value.ValueKind != JsonValueKind.Array) throw Erro(nome, "array de evidências");
+        return v.Value.EnumerateArray().Select(e =>
+        {
+            if (e.ValueKind != JsonValueKind.Object) throw Erro(nome, "objetos {type, label, url}");
+            string Campo(string c) => e.TryGetProperty(c, out var x) && x.ValueKind == JsonValueKind.String ? LerTexto(x, $"{nome}.{c}") : string.Empty;
+            return new Evidencia(Campo("type"), Campo("label"), Campo("url"));
+        }).ToList();
     }
 }

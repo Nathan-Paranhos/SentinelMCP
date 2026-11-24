@@ -1,195 +1,150 @@
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.Hosting;
+using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
+using Microsoft.AspNetCore.Authentication;
+using Sentinel.Core.CasosDeUso;
 using Sentinel.Core.Excecoes;
-using Sentinel.Core.Modelos;
-using Sentinel.Persistence.Contratos;
 
 namespace Sentinel.Api.Auth;
 
-public sealed record IdentidadeResolvida(
-    string Emissor,
-    string Sujeito,
-    string? ClienteId,
-    List<string> Escopos,
-    PapelUsuario? PapelDeclarado
-);
-
-public interface IServicoIdentidade
+public static class EsquemasDeAutenticacao
 {
-    Task<VinculoMembro> AutenticarEAutorizarAsync(
-        HttpContext contextoHttp,
-        Guid espacoTrabalhoId,
-        string escopoNecessario,
-        PapelUsuario papelMinimoObrigatorio,
-        CancellationToken ct = default);
-
-    IdentidadeResolvida ResolverIdentidade(HttpContext contextoHttp);
+    public const string JwtMcp = "SentinelMcpJwt";
+    public const string CookieWeb = "SentinelWeb";
+    public const string OidcWeb = "SentinelOidc";
 }
 
-public sealed class ServicoIdentidade : IServicoIdentidade
+public static class Escopos
 {
-    private readonly IRepositorioEspacoTrabalho _repositorioEspacoTrabalho;
-    private readonly IConfiguration? _config;
-    private readonly IWebHostEnvironment? _env;
+    public const string LerMemoria = "read:memory";
+    public const string EscreverDecisao = "write:decision";
+    public const string EscreverIncidente = "write:incident";
+    public static readonly string[] Todos = [LerMemoria, EscreverDecisao, EscreverIncidente];
+}
 
-    public ServicoIdentidade(
-        IRepositorioEspacoTrabalho repositorioEspacoTrabalho,
-        IConfiguration? config = null,
-        IWebHostEnvironment? env = null)
+public sealed record IdentidadeAgente(Ator Ator, IReadOnlySet<string> Escopos, string Metodo)
+{
+    public void ExigirEscopo(string escopo)
     {
-        _repositorioEspacoTrabalho = repositorioEspacoTrabalho;
+        if (!Escopos.Contains(escopo))
+            throw new ExcecaoDeAcessoNegado($"Escopo insuficiente. Necessário: '{escopo}'.");
+    }
+}
+
+// Configuração de chave de API para agentes
+public sealed class ConfiguracaoChaveApi
+{
+    public string Nome { get; set; } = string.Empty;
+    public string KeySha256 { get; set; } = string.Empty;
+    public string Subject { get; set; } = string.Empty;
+    public string Issuer { get; set; } = string.Empty;
+    public string? ClientId { get; set; }
+    public List<string> Scopes { get; set; } = [];
+}
+
+public interface IServicoIdentidadeAgente
+{
+    // Autentica o agente MCP
+    Task<IdentidadeAgente> AutenticarAsync(HttpContext contexto);
+}
+
+public sealed class ServicoIdentidadeAgente : IServicoIdentidadeAgente
+{
+    private readonly IConfiguration _config;
+    private readonly IWebHostEnvironment _ambiente;
+    private readonly ILogger<ServicoIdentidadeAgente> _log;
+    private readonly List<(byte[] Hash, ConfiguracaoChaveApi Config)> _chaves;
+
+    public ServicoIdentidadeAgente(IConfiguration config, IWebHostEnvironment ambiente, ILogger<ServicoIdentidadeAgente> log)
+    {
         _config = config;
-        _env = env;
+        _ambiente = ambiente;
+        _log = log;
+        _chaves = (config.GetSection("Sentinel:ApiKeys").Get<List<ConfiguracaoChaveApi>>() ?? [])
+            .Where(k => !string.IsNullOrWhiteSpace(k.KeySha256) && !string.IsNullOrWhiteSpace(k.Subject) && !string.IsNullOrWhiteSpace(k.Issuer))
+            .Select(k => (Convert.FromHexString(k.KeySha256.Trim()), k))
+            .ToList();
     }
 
-    public IdentidadeResolvida ResolverIdentidade(HttpContext contextoHttp)
+    public static bool JwtConfigurado(IConfiguration config) =>
+        !string.IsNullOrWhiteSpace(config["Authentication:Mcp:Authority"]);
+
+    // Verifica se tokens mock estão habilitados
+    public static bool MockPermitido(IConfiguration config, IHostEnvironment ambiente) =>
+        !ambiente.IsProduction() && config.GetValue<bool>("Sentinel:AllowMockTokens");
+
+    public async Task<IdentidadeAgente> AutenticarAsync(HttpContext contexto)
     {
-        var cabecalhoAutorizacao = contextoHttp.Request.Headers.Authorization.ToString();
-        if (string.IsNullOrWhiteSpace(cabecalhoAutorizacao) || !cabecalhoAutorizacao.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+        var cabecalho = contexto.Request.Headers.Authorization.ToString();
+        if (string.IsNullOrWhiteSpace(cabecalho) || !cabecalho.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
+            throw new ExcecaoDeNaoAutorizado("Cabeçalho Authorization ausente. Esperado token Bearer.");
+
+        var token = cabecalho["Bearer ".Length..].Trim();
+        if (token.Length == 0)
+            throw new ExcecaoDeNaoAutorizado("Token Bearer vazio.");
+
+        // Autenticação por chave de API
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(token));
+        foreach (var (hashConfigurado, chave) in _chaves)
         {
-            throw new ExcecaoDeNaoAutorizado("Cabeçalho de autorização ausente ou inválido. Esperado token Bearer.");
-        }
-
-        var token = cabecalhoAutorizacao["Bearer ".Length..].Trim();
-        var permiteMock = (_env?.IsDevelopment() ?? true) || (_config?.GetValue<bool>("Sentinel:AllowMockTokens") ?? true);
-
-        if (token.StartsWith("mock:", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!permiteMock)
+            if (CryptographicOperations.FixedTimeEquals(hash, hashConfigurado))
             {
-                throw new ExcecaoDeNaoAutorizado("Tokens mock são estritamente desabilitados em ambiente de produção. Utilize credenciais válidas configuradas em Sentinel:ApiKeys.");
-            }
-
-            var dadosBrutos = token["mock:".Length..].Trim();
-            string emissor = "https://auth.sentinel.dev";
-            string sujeito = "agent-dev-1";
-            string papelTexto = "Contributor";
-            string escoposTexto = "read:memory,write:decision,write:incident";
-            string clientId = "claude-code";
-
-            if (dadosBrutos.Contains('|'))
-            {
-                var partes = dadosBrutos.Split('|');
-                if (partes.Length > 0 && !string.IsNullOrEmpty(partes[0])) sujeito = partes[0];
-                if (partes.Length > 1 && !string.IsNullOrEmpty(partes[1])) papelTexto = partes[1];
-                if (partes.Length > 2 && !string.IsNullOrEmpty(partes[2])) escoposTexto = partes[2];
-                if (partes.Length > 3 && !string.IsNullOrEmpty(partes[3])) clientId = partes[3];
-                if (partes.Length > 4 && !string.IsNullOrEmpty(partes[4])) emissor = partes[4];
-            }
-            else
-            {
-                var fimEsquema = dadosBrutos.IndexOf("://", StringComparison.OrdinalIgnoreCase);
-                if (fimEsquema >= 0)
-                {
-                    var proximoDoisPontos = dadosBrutos.IndexOf(':', fimEsquema + 3);
-                    if (proximoDoisPontos >= 0)
-                    {
-                        emissor = dadosBrutos[..proximoDoisPontos];
-                        dadosBrutos = dadosBrutos[(proximoDoisPontos + 1)..];
-                    }
-                }
-
-                var partes = dadosBrutos.Split(':');
-                if (partes.Length >= 4)
-                {
-                    sujeito = partes[0];
-                    papelTexto = partes[1];
-                    clientId = partes[^1];
-                    escoposTexto = string.Join(':', partes.Skip(2).Take(partes.Length - 3));
-                }
-                else
-                {
-                    if (partes.Length > 0 && !string.IsNullOrEmpty(partes[0])) sujeito = partes[0];
-                    if (partes.Length > 1 && !string.IsNullOrEmpty(partes[1])) papelTexto = partes[1];
-                    if (partes.Length > 2 && !string.IsNullOrEmpty(partes[2])) escoposTexto = partes[2];
-                }
-            }
-
-            var escopos = escoposTexto.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
-            Enum.TryParse<PapelUsuario>(papelTexto, true, out var papel);
-
-            return new IdentidadeResolvida(emissor, sujeito, clientId, escopos, papel);
-        }
-
-        if (_config != null)
-        {
-            var secaoChave = _config.GetSection($"Sentinel:ApiKeys:{token}");
-            if (secaoChave.Exists())
-            {
-                var sujeito = secaoChave["Subject"] ?? "agent-dev-1";
-                var emissor = secaoChave["Issuer"] ?? "https://auth.sentinel.dev";
-                var clientId = secaoChave["ClientId"];
-                var escopos = secaoChave.GetSection("Scopes").Get<List<string>>() ?? ["read:memory", "write:decision", "write:incident"];
-                var papelTexto = secaoChave["Role"] ?? "Contributor";
-                Enum.TryParse<PapelUsuario>(papelTexto, true, out var papel);
-                return new IdentidadeResolvida(emissor, sujeito, clientId, escopos, papel);
+                return new IdentidadeAgente(
+                    new Ator(chave.Issuer, chave.Subject, chave.ClientId, CanalDeAcesso.Mcp),
+                    chave.Scopes.ToHashSet(StringComparer.Ordinal), "api-key");
             }
         }
 
-        if (permiteMock)
+        // Autenticação por token mock
+        if (token.StartsWith("mock:", StringComparison.Ordinal))
         {
-            var tokensDesenvolvimento = new Dictionary<string, (string Sujeito, string Emissor, string? ClienteId, List<string> Escopos, PapelUsuario Papel)>
-            {
-                ["agent-token"] = ("agent-dev-1", "https://auth.sentinel.dev", "claude-code", ["read:memory", "write:decision", "write:incident"], PapelUsuario.Contributor),
-                ["maintainer-token"] = ("maintainer-alice", "https://auth.sentinel.dev", null, ["read:memory", "write:decision", "write:incident", "admin:all"], PapelUsuario.Maintainer),
-                ["reader-token"] = ("reader-bob", "https://auth.sentinel.dev", "cursor-ide", ["read:memory"], PapelUsuario.Reader)
-            };
-
-            if (tokensDesenvolvimento.TryGetValue(token, out var info))
-            {
-                return new IdentidadeResolvida(info.Emissor, info.Sujeito, info.ClienteId, info.Escopos, info.Papel);
-            }
+            if (!MockPermitido(_config, _ambiente))
+                throw new ExcecaoDeNaoAutorizado("Token inválido.");
+            return LerTokenMock(token["mock:".Length..]);
         }
 
-        throw new ExcecaoDeNaoAutorizado($"Token Bearer inválido ou não autorizado: '{token}'.");
+        // Autenticação por token JWT
+        if (JwtConfigurado(_config))
+        {
+            var resultado = await contexto.AuthenticateAsync(EsquemasDeAutenticacao.JwtMcp);
+            if (resultado.Succeeded && resultado.Principal != null)
+                return LerJwt(resultado.Principal);
+
+            _log.LogInformation("Falha de autenticação JWT MCP: {Motivo}", resultado.Failure?.GetType().Name ?? "sem credencial");
+        }
+
+        throw new ExcecaoDeNaoAutorizado("Token inválido ou expirado.");
     }
 
-    public async Task<VinculoMembro> AutenticarEAutorizarAsync(
-        HttpContext contextoHttp,
-        Guid espacoTrabalhoId,
-        string escopoNecessario,
-        PapelUsuario papelMinimoObrigatorio,
-        CancellationToken ct = default)
+    private static IdentidadeAgente LerJwt(ClaimsPrincipal principal)
     {
-        var identidade = ResolverIdentidade(contextoHttp);
+        var emissor = principal.FindFirstValue("iss");
+        var sujeito = principal.FindFirstValue("sub");
+        if (string.IsNullOrWhiteSpace(emissor) || string.IsNullOrWhiteSpace(sujeito))
+            throw new ExcecaoDeNaoAutorizado("Token sem as claims 'iss' e 'sub'.");
 
-        if (!identidade.Escopos.Contains(escopoNecessario) && !identidade.Escopos.Contains("admin:all"))
-        {
-            throw new ExcecaoDeNaoAutorizado($"Escopo insuficiente. Necessário: '{escopoNecessario}'. Escopos presentes: '{string.Join(", ", identidade.Escopos)}'.");
-        }
+        var clienteId = principal.FindFirstValue("client_id") ?? principal.FindFirstValue("azp");
+        var escopos = principal.FindAll("scope").Concat(principal.FindAll("scp"))
+            .SelectMany(c => c.Value.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+            .ToHashSet(StringComparer.Ordinal);
 
-        var vinculo = await _repositorioEspacoTrabalho.ObterVinculoMembroAsync(espacoTrabalhoId, identidade.Emissor, identidade.Sujeito, ct);
-        if (vinculo == null)
-        {
-            throw new ExcecaoDeNaoAutorizado($"O usuário '{identidade.Sujeito}' não possui vínculo cadastrado no espaço de trabalho '{espacoTrabalhoId}'.");
-        }
-
-        if (!vinculo.Ativo)
-        {
-            throw new ExcecaoDeNaoAutorizado($"O vínculo do usuário '{identidade.Sujeito}' no espaço de trabalho '{espacoTrabalhoId}' está inativo.");
-        }
-
-        if (!PossuiPapelSuficiente(vinculo.Papel, papelMinimoObrigatorio))
-        {
-            throw new ExcecaoDeNaoAutorizado($"Papel insuficiente. Atual: '{vinculo.Papel}', Mínimo exigido: '{papelMinimoObrigatorio}'.");
-        }
-
-        return vinculo;
+        return new IdentidadeAgente(new Ator(emissor, sujeito, clienteId, CanalDeAcesso.Mcp), escopos, "jwt");
     }
 
-    private static bool PossuiPapelSuficiente(PapelUsuario papelAtual, PapelUsuario papelNecessario)
+    // Lê token mock no formato: mock:sujeito|escopos|clientId|emissor
+    private static IdentidadeAgente LerTokenMock(string dados)
     {
-        var niveis = new Dictionary<PapelUsuario, int>
-        {
-            [PapelUsuario.Leitor] = 1,
-            [PapelUsuario.Colaborador] = 2,
-            [PapelUsuario.Mantenedor] = 3,
-            [PapelUsuario.Reader] = 1,
-            [PapelUsuario.Contributor] = 2,
-            [PapelUsuario.Maintainer] = 3
-        };
+        var partes = dados.Split('|');
+        var sujeito = partes.ElementAtOrDefault(0);
+        if (string.IsNullOrWhiteSpace(sujeito))
+            throw new ExcecaoDeNaoAutorizado("Token mock sem sujeito.");
 
-        return niveis.GetValueOrDefault(papelAtual, 0) >= niveis.GetValueOrDefault(papelNecessario, 0);
+        var escopos = (partes.ElementAtOrDefault(1) is { Length: > 0 } texto ? texto : string.Join(',', Escopos.Todos))
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToHashSet(StringComparer.Ordinal);
+        var clienteId = partes.ElementAtOrDefault(2) is { Length: > 0 } c ? c : "dev-client";
+        var emissor = partes.ElementAtOrDefault(3) is { Length: > 0 } e ? e : "https://auth.sentinel.dev";
+
+        return new IdentidadeAgente(new Ator(emissor, sujeito.Trim(), clienteId, CanalDeAcesso.Mcp), escopos, "mock");
     }
 }

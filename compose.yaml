@@ -1,3 +1,7 @@
+# Ambiente local. Copie .env.example para .env e defina as senhas antes de subir:
+#   docker compose up -d --build
+# Fluxo: postgres (cria o login de menor privilégio) -> sentinel-migrate (DDL como superusuário)
+#        -> sentinel-api (conecta como sentinel_app_login, sujeito a RLS).
 services:
   postgres:
     image: postgres:17-alpine
@@ -6,17 +10,33 @@ services:
     environment:
       POSTGRES_DB: sentinel_mcp
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgrespassword
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      SENTINEL_APP_DB_PASSWORD: ${SENTINEL_APP_DB_PASSWORD:?defina SENTINEL_APP_DB_PASSWORD no .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./db/migrations:/docker-entrypoint-initdb.d:ro
+      - ./db/docker:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d sentinel_mcp"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+
+  sentinel-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["--migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      Sentinel__StorageProvider: PostgreSQL
+      ConnectionStrings__DatabaseAdmin: "Host=postgres;Port=5432;Database=sentinel_mcp;Username=postgres;Password=${POSTGRES_PASSWORD}"
+      ConnectionStrings__Database: "Host=postgres;Port=5432;Database=sentinel_mcp;Username=sentinel_app_login;Password=${SENTINEL_APP_DB_PASSWORD}"
 
   sentinel-api:
     build:
@@ -25,15 +45,21 @@ services:
     container_name: sentinel-api
     restart: unless-stopped
     depends_on:
-      postgres:
-        condition: service_healthy
+      sentinel-migrate:
+        condition: service_completed_successfully
     environment:
-      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
       Sentinel__StorageProvider: PostgreSQL
-      Sentinel__AutoMigrate: "true"
-      ConnectionStrings__Database: "Host=postgres;Port=5432;Database=sentinel_mcp;Username=postgres;Password=postgrespassword;"
+      Sentinel__SeedDemoData: "false"
+      ConnectionStrings__Database: "Host=postgres;Port=5432;Database=sentinel_mcp;Username=sentinel_app_login;Password=${SENTINEL_APP_DB_PASSWORD}"
+      Authentication__Mcp__Authority: ${Authentication__Mcp__Authority:-}
+      Authentication__Mcp__Audience: ${Authentication__Mcp__Audience:-sentinel-mcp}
+      Authentication__Web__Authority: ${Authentication__Web__Authority:-}
+      Authentication__Web__ClientId: ${Authentication__Web__ClientId:-}
+      Authentication__Web__ClientSecret: ${Authentication__Web__ClientSecret:-}
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
+    # A imagem aspnet não traz curl/wget; monitore /readyz (verifica o banco) pelo orquestrador.
 
 volumes:
   postgres_data:

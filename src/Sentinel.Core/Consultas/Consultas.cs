@@ -9,7 +9,8 @@ public sealed record ConsultaContexto(
     string TipoRegistro = "decision",
     int Limite = 10,
     string PrincipalId = "",
-    string? ClienteId = null
+    string? ClienteId = null,
+    string? PrincipalEmissor = null
 );
 
 public sealed record ItemContexto(
@@ -42,30 +43,16 @@ public sealed record ConsultaLinhaDoTempo(
     int Limite = 20
 );
 
-public sealed record ItemEventoLinhaDoTempo(
-    Guid EventoId,
-    int VersaoFluxo,
-    string Tipo,
-    DateTimeOffset RegistradoEm,
-    string AutorSujeito,
-    string? ClienteId,
-    Guid? CargaId
-);
-
 public sealed record ResultadoLinhaDoTempo(
+    string TipoRegistro,
     Guid FluxoId,
     int VersaoFluxoAtual,
     int VersaoAlvo,
-    object EstadoReconstituido,
-    List<ItemEventoLinhaDoTempo> Eventos,
+    DecisaoReconstituida? EstadoDecisao,
+    IncidenteReconstituido? EstadoIncidente,
+    string? ChaveTopico,
+    List<EventoMemoria> Eventos,
     int? ProximaVersaoAnterior
-);
-
-public sealed record ConsultaComprovanteContexto(
-    Guid EspacoTrabalhoId,
-    Guid ProjetoId,
-    Guid ConsultaId,
-    string PrincipalId
 );
 
 public sealed record ResultadoComprovanteContexto(
@@ -73,8 +60,27 @@ public sealed record ResultadoComprovanteContexto(
     Guid EspacoTrabalhoId,
     Guid ProjetoId,
     string PrincipalId,
+    string? PrincipalEmissor,
     string? ClienteId,
     string ModoBusca,
     DateTimeOffset CriadoEm,
-    List<ItemReciboConsulta> Itens
+    List<ItemReciboConsulta> Itens,
+    string Digest,
+    bool IntegridadeVerificada
+);
+
+public sealed record HistoricoDoFluxo(
+    List<EventoMemoria> Eventos,
+    Dictionary<Guid, CargaMemoria> Cargas
+);
+
+public sealed record PainelDeRevisao(
+    EspacoTrabalho EspacoTrabalho,
+    List<EspacoTrabalho> EspacosDisponiveis,
+    VinculoMembro Vinculo,
+    List<PropostaPendente> Propostas,
+    Dictionary<Guid, DecisaoAtual> DecisoesPorTopico,
+    List<DecisaoAtual> DecisoesVigentes,
+    List<IncidenteAtual> Incidentes,
+    List<EventoMemoria> Eventos
 );

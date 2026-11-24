@@ -480,3 +480,71 @@
         transform: translateY(0);
     }
 }
+
+.status-pill.rejected-state {
+    background: var(--status-danger-bg);
+    color: var(--status-danger);
+}
+
+.modal-reason-hint {
+    margin-top: 4px;
+    font-size: 0.72rem;
+    color: var(--text-tertiary);
+    text-align: right;
+}
+
+.modal-reason-hint.error {
+    color: var(--status-danger);
+}
+
+.btn-macos:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.review-permission-notice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    background: var(--status-warning-bg);
+    color: var(--status-warning);
+    font-size: 0.84rem;
+    font-weight: 500;
+}
+
+.superseded-decision-box {
+    background-color: var(--bg-surface-secondary);
+    border-radius: var(--radius-md);
+    border-left: 3px solid var(--status-warning);
+    padding: 1rem 1.25rem;
+    font-size: 0.88rem;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+.superseded-decision-title {
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 4px;
+}
+
+.evidence-text-row {
+    cursor: default;
+}
+
+.evidence-text-row:hover {
+    background-color: var(--bg-surface-secondary);
+}
+
+.evidence-raw-url {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-tertiary);
+    word-break: break-all;
+}
+
+.toast-pill.toast-error {
+    border-color: rgba(224, 82, 82, 0.35);
+}

@@ -11,12 +11,17 @@ public static class ValidadorDeInvariantes
 
     public static void ValidarChaveDoTopico(string? chaveTopico)
     {
-        if (string.IsNullOrWhiteSpace(chaveTopico))
-            throw new ExcecaoDeValidacao("A chave do tópico é obrigatória.");
-        if (chaveTopico.Length is < 1 or > 80)
-            throw new ExcecaoDeValidacao("A chave do tópico deve possuir entre 1 e 80 caracteres.");
-        if (!PadraoSlugAscii.IsMatch(chaveTopico))
-            throw new ExcecaoDeValidacao("A chave do tópico deve ser um slug ASCII (alfanumérico, hifens, sublinhados ou pontos).");
+        ValidarSlug(chaveTopico, "chave do tópico");
+    }
+
+    public static void ValidarSlug(string? slug, string nomeCampo = "slug")
+    {
+        if (string.IsNullOrWhiteSpace(slug))
+            throw new ExcecaoDeValidacao($"O {nomeCampo} é obrigatório.");
+        if (slug.Length is < 1 or > 80)
+            throw new ExcecaoDeValidacao($"O {nomeCampo} deve possuir entre 1 e 80 caracteres.");
+        if (!PadraoSlugAscii.IsMatch(slug))
+            throw new ExcecaoDeValidacao($"O {nomeCampo} deve ser um slug ASCII (alfanumérico, hifens, sublinhados ou pontos).");
     }
 
     public static void ValidarTitulo(string? titulo)
@@ -69,6 +74,12 @@ public static class ValidadorDeInvariantes
                 throw new ExcecaoDeValidacao("O rótulo da evidência é obrigatório.");
             if (string.IsNullOrWhiteSpace(item.Url))
                 throw new ExcecaoDeValidacao("A URL da evidência é obrigatória.");
+            if (item.Tipo.Length > 50)
+                throw new ExcecaoDeValidacao("O tipo da evidência não pode exceder 50 caracteres.");
+            if (item.Rotulo.Length > 200)
+                throw new ExcecaoDeValidacao("O rótulo da evidência não pode exceder 200 caracteres.");
+            if (item.Url.Length > 2048)
+                throw new ExcecaoDeValidacao("A URL da evidência não pode exceder 2048 caracteres.");
 
             if (!Uri.TryCreate(item.Url, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
                 throw new ExcecaoDeValidacao($"A URL da evidência deve ser HTTPS válida: '{item.Url}'.");
@@ -129,4 +140,34 @@ public static class ValidadorDeInvariantes
         if (versaoEsperada < 0)
             throw new ExcecaoDeValidacao("A versão esperada deve ser maior ou igual a zero.");
     }
+
+    public static void ValidarMotivoRejeicao(string? motivo)
+    {
+        if (string.IsNullOrWhiteSpace(motivo))
+            throw new ExcecaoDeValidacao("O motivo da rejeição é obrigatório.");
+        if (motivo.Length > 1000)
+            throw new ExcecaoDeValidacao("O motivo da rejeição não pode exceder 1000 caracteres.");
+    }
+
+    public static string ValidarTipoConsulta(string? tipo)
+    {
+        var normalizado = string.IsNullOrWhiteSpace(tipo) ? "decision" : tipo.Trim().ToLowerInvariant();
+        if (normalizado is not ("decision" or "incident" or "both"))
+            throw new ExcecaoDeValidacao("O tipo deve ser 'decision', 'incident' ou 'both'.");
+        return normalizado;
+    }
+
+    public static string ValidarTipoFluxo(string? tipo)
+    {
+        var normalizado = tipo?.Trim().ToLowerInvariant();
+        if (normalizado is not ("decision" or "incident"))
+            throw new ExcecaoDeValidacao("O tipo deve ser 'decision' ou 'incident'.");
+        return normalizado;
+    }
+
+    // Normaliza chave de tópico em minúsculas
+    public static string NormalizarChaveDoTopico(string chaveTopico) => chaveTopico.Trim().ToLowerInvariant();
+
+    // Normaliza chave técnica em minúsculas
+    public static string NormalizarChaveTecnica(string chave) => chave.Trim().ToLowerInvariant();
 }

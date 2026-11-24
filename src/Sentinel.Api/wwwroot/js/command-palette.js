@@ -1,5 +1,6 @@
 import { appStore } from './store.js';
 import { Icons } from './icons.js';
+import { escapeHtml } from './util.js';
 
 export class CommandPalette {
     constructor() {
@@ -162,8 +163,8 @@ export class CommandPalette {
         propostas.forEach(p => {
             pool.push({
                 group: 'Propostas Pendentes',
-                title: p.titulo,
-                sub: `tópico: ${p.chaveTopico} • v${p.versaoFluxo}`,
+                title: p.titulo || '(sem título)',
+                sub: `tópico: ${p.chaveTopico || ''} • v${p.versaoFluxo ?? ''}`,
                 icon: Icons.reviews,
                 action: () => {
                     appStore.set('selectedReviewId', p.topicoId);
@@ -175,8 +176,8 @@ export class CommandPalette {
         decisoes.forEach(d => {
             pool.push({
                 group: 'Decisões Vigentes',
-                title: d.titulo,
-                sub: `tópico: ${d.chaveTopico} • v${d.versaoFluxo}`,
+                title: d.titulo || '(sem título)',
+                sub: `tópico: ${d.chaveTopico || ''} • v${d.versaoFluxo ?? ''}`,
                 icon: Icons.decisions,
                 action: () => {
                     appStore.set('selectedDecisionId', d.topicoId);
@@ -188,8 +189,8 @@ export class CommandPalette {
         incidentes.forEach(i => {
             pool.push({
                 group: 'Incidentes',
-                title: i.titulo,
-                sub: `incidente: ${i.incidenteId.slice(0, 8)}...`,
+                title: i.titulo || '(sem título)',
+                sub: `incidente: ${String(i.incidenteId || '').slice(0, 8)}...`,
                 icon: Icons.incidents,
                 action: () => {
                     appStore.set('selectedIncidentId', i.incidenteId);
@@ -199,7 +200,7 @@ export class CommandPalette {
         });
 
         this.items = query ? pool.filter(item => {
-            return item.title.toLowerCase().includes(query) ||
+            return String(item.title).toLowerCase().includes(query) ||
                    (item.sub && item.sub.toLowerCase().includes(query)) ||
                    item.group.toLowerCase().includes(query);
         }) : pool;
@@ -229,7 +230,7 @@ export class CommandPalette {
             groupItems.forEach(({ item, index }) => {
                 const isFocused = index === this.focusedIndex;
                 html += `
-                    <div class="command-result-item ${isFocused ? 'focused' : ''}" data-index="${index}">
+                    <div class="command-result-item ${isFocused ? 'focused' : ''}" data-index="${index}" role="option" aria-selected="${isFocused ? 'true' : 'false'}">
                         <div class="command-result-left">
                             <span style="display:flex;align-items:center;color:var(--text-secondary);">${item.icon}</span>
                             <div>
@@ -253,13 +254,4 @@ export class CommandPalette {
             });
         });
     }
-}
-
-function escapeHtml(str) {
-    if (!str) return '';
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;');
 }

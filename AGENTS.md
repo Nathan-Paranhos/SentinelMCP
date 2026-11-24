@@ -1,68 +1,123 @@
 # Sentinel-MCP — Guia para Agentes de IA e Engenharia
 
-Este documento instrui agentes autônomos e desenvolvedores sobre o funcionamento, comandos e execução repetível do Sentinel-MCP.
+Este documento instrui agentes autônomos e desenvolvedores sobre o funcionamento, comandos e execução repetível do Sentinel-MCP. Detalhes de segurança e configuração estão no [README](README.md).
 
 ## Pré-requisitos
-- .NET 9.0 SDK ou superior (`dotnet --version`)
-- PostgreSQL 16+ (local ou via Docker `compose.yaml`)
-- Docker & Docker Compose (opcional para ambiente conteinerizado)
+- .NET 9.0 SDK (`dotnet --version`)
+- Docker: necessário para `docker compose` e para os testes de integração contra PostgreSQL (Testcontainers)
+- PostgreSQL 16+ apenas se for rodar a API com `Sentinel:StorageProvider=PostgreSQL` fora do compose
 
 ## Estrutura da Solução
-- `src/Sentinel.Core`: Modelos de domínio, invariantes, eventos de domínio, redutores e casos de uso.
-- `src/Sentinel.Persistence`: Acesso a dados com Npgsql/SQL puro, migrações, isolamento RLS, recibos e busca textual.
-- `src/Sentinel.Api`: Servidor MCP (Streamable HTTP `/mcp`), rota web de revisão humana (`/review`) e autenticação.
-- `tests/Sentinel.UnitTests`: Testes unitários de domínio, redutores, invariantes e validação de schema.
-- `tests/Sentinel.ContractTests`: Testes de conformidade do protocolo MCP e schemas de entrada/saída.
-- `tests/Sentinel.IntegrationTests`: Testes de integração cobrindo os critérios de aceite AC-01 a AC-08 (concorrência, isolamento, idempotência, vigência, busca e reconstrução).
+- `src/Sentinel.Core`: domínio sem dependência de infraestrutura.
+  - `CasosDeUso/ServicoDeMemoria.cs`: camada única de casos de uso (validação de entrada, vínculo/papel no workspace, regra de canal web para aprovar/rejeitar/restaurar). MCP e página web chamam apenas esta classe.
+  - `Contratos/IRepositorios.cs`: interfaces de repositório, reconstrução de projeções, retenção e prontidão.
+  - `Redutores/`: `RedutorDeDecisao` e `RedutorDeIncidente`, única fonte das regras de projeção.
+  - `Validacao/ValidadorDeInvariantes.cs`, `Modelos/`, `Comandos/`, `Consultas/`, `Excecoes/` (códigos de erro estáveis), `Comum/`.
+- `src/Sentinel.Persistence`: `EmMemoria/` (dev/testes) e `PostgreSql/` (Npgsql com SQL puro, RLS por transação, migrador com lock consultivo).
+- `src/Sentinel.Api`: `Program.cs` (composição, CLI, autenticação, pipeline), `Mcp/` (endpoint `POST /mcp` com suporte a JSON-RPC, `ModelContextProtocol.AspNetCore` e publicação de `outputSchema`), `Admin/` (API REST `/api/admin/*` para gestão de workspaces, projetos e vínculos), `Auth/` (chave de API, token mock, JWT), `WebReview/` (`/review` e `/api/review/*`), `Operacao/` (diagnósticos OpenTelemetry e job de retenção), `wwwroot/`.
+- `db/migrations` (001 schema, 002 RLS, 003 segurança/busca/integridade), `db/fixtures` (dados de demonstração), `db/docker` (criação do papel/login no compose).
+- `tests/Sentinel.UnitTests`: invariantes, redutores, idempotência e `ServicoDeMemoria`.
+- `tests/Sentinel.ContractTests`: protocolo MCP e schemas das tools.
+- `tests/Sentinel.IntegrationTests`: AC-01 a AC-08 por HTTP, contra InMemory e contra PostgreSQL via Testcontainers (inclui testes de RLS e de imutabilidade do log).
+
+## Ambiente
+O projeto não tem `launchSettings.json`: sem `ASPNETCORE_ENVIRONMENT`, `dotnet run` sobe em **Production**, que usa PostgreSQL e falha sem `ConnectionStrings:Database`. Para desenvolvimento local use `ASPNETCORE_ENVIRONMENT=Development` (InMemory com dados de demonstração, tokens mock e login de desenvolvimento habilitados por `appsettings.Development.json`).
+
+```bash
+export ASPNETCORE_ENVIRONMENT=Development      # bash
+```
+```powershell
+$env:ASPNETCORE_ENVIRONMENT = "Development"    # PowerShell
+```
 
 ## Comandos Essenciais
 
-### Compilar a Solução
+### Compilar
 ```bash
 dotnet build Sentinel.sln
 ```
 
-### Executar Todos os Testes
+### Testes
 ```bash
 dotnet test Sentinel.sln --logger "console;verbosity=normal"
-```
-
-### Executar Testes com Filtros
-```bash
-# Apenas testes unitários
 dotnet test tests/Sentinel.UnitTests
-
-# Apenas critérios de aceite (integração)
-dotnet test tests/Sentinel.IntegrationTests
-
-# Apenas contratos MCP
 dotnet test tests/Sentinel.ContractTests
+dotnet test tests/Sentinel.IntegrationTests
 ```
+Os testes de PostgreSQL exigem Docker. Sem Docker eles são ignorados (aparecem como *skipped*); com `SENTINEL_REQUIRE_DOCKER=1` (usado no CI) eles falham. Não existe categoria `Smoke`.
 
-### Subir Ambiente Local com Docker Compose
+### Executar a API
 ```bash
-docker compose up -d --build
+dotnet run --project src/Sentinel.Api          # http://localhost:5000
 ```
 
-### Executar a API Localmente
+### Argumentos da aplicação (sempre depois de `--`)
 ```bash
-dotnet run --project src/Sentinel.Api
-```
+# PostgreSQL: aplica migrações pendentes (conexão admin, lock consultivo); se aplicar a 003, reconstrói projeções; sai.
+dotnet run --project src/Sentinel.Api -- --migrate
 
-### Popular Dados de Demonstração / Fixtures Idempotentes
+# InMemory: popula dados de demonstração e continua rodando a API.
+# PostgreSQL: aplica db/fixtures (conexão admin), reconstrói projeções e sai com código 0 (ideal para automações/migrações).
+dotnet run --project src/Sentinel.Api -- --seed-demo
+
+# Reconstrói projeções a partir dos eventos (todos os workspaces ou um) e sai.
+dotnet run --project src/Sentinel.Api -- --rebuild-projections
+dotnet run --project src/Sentinel.Api -- --rebuild-projections --workspace-id <uuid>
+```
+`--migrate` só tem efeito com `Sentinel:StorageProvider=PostgreSQL` (com InMemory ele é ignorado e a API sobe normalmente). Não existe endpoint HTTP de manutenção.
+
+### Ambiente com Docker Compose (PostgreSQL)
 ```bash
-dotnet run --project src/Sentinel.Api --seed-demo
+cp .env.example .env            # defina POSTGRES_PASSWORD e SENTINEL_APP_DB_PASSWORD
+docker compose up -d --build    # postgres -> sentinel-migrate (--migrate) -> sentinel-api
 ```
-
-### Reconstruir Projeções a partir de Eventos
+O banco sobe sem dados. Para carregar a demonstração:
 ```bash
-dotnet run --project src/Sentinel.Api --rebuild-projections
+docker compose exec -T postgres psql -U postgres -d sentinel_mcp -v ON_ERROR_STOP=1 < db/fixtures/001_seed_demo.sql
+docker compose run --rm sentinel-migrate --rebuild-projections
 ```
 
-## Smoke Test Rápido
-1. Inicie a API (`dotnet run --project src/Sentinel.Api`).
-2. Faça uma requisição de health check:
-   `curl http://localhost:5000/healthz` -> `{"status":"Healthy"}`.
-3. Inicie a sessão MCP handshake:
-   `POST http://localhost:5000/mcp` com `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"Claude Code","version":"1.0"}}}`.
-4. O servidor responde com as capacidades e ferramentas disponíveis (`propose_decision`, `log_incident`, `query_context`, `get_timeline`, `get_context_receipt`).
+## Dados de demonstração
+- Workspace `11111111-1111-1111-1111-111111111111`, projeto `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`.
+- Vínculos (emissor `https://auth.sentinel.dev`): `agent-dev-1` (Contributor), `maintainer-alice` (Maintainer), `reader-bob` (Reader).
+- Segundo workspace isolado `22222222-2222-2222-2222-222222222222` (projeto `bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb`) com `sec-agent-1` e `sec-maintainer`.
+
+## Smoke Test Rápido (Development)
+1. Inicie a API com `ASPNETCORE_ENVIRONMENT=Development` (`dotnet run --project src/Sentinel.Api`).
+2. Health check:
+   ```bash
+   curl http://localhost:5000/healthz
+   # {"status":"Healthy"}
+   ```
+3. Handshake MCP com token mock (aceito só fora de Production e com `Sentinel:AllowMockTokens=true`):
+   ```bash
+   curl -X POST http://localhost:5000/mcp \
+     -H "Content-Type: application/json" \
+     -H "Authorization: Bearer mock:agent-dev-1|read:memory|smoke" \
+     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1.0"}}}'
+   ```
+   Resposta esperada: `protocolVersion` `2025-06-18`, `capabilities.tools` e `serverInfo.name` `Sentinel-MCP`.
+4. Liste as tools com `{"jsonrpc":"2.0","id":2,"method":"tools/list"}` (mesmo cabeçalho): `propose_decision`, `log_incident`, `query_context`, `get_timeline`, `get_context_receipt`.
+5. Sem `Authorization` o servidor responde 401 com `WWW-Authenticate`; `GET /mcp` responde 405.
+
+## API de Administração (`/api/admin/*`)
+A API administrativa permite gerenciar workspaces, projetos e vínculos sem depender de scripts SQL diretos:
+- `GET /api/admin/workspaces`: lista todos os workspaces cadastrados.
+- `POST /api/admin/workspaces`: cria um workspace (`{ "id": "uuid", "slug": "slug-valido", "nome": "Nome" }`).
+- `POST /api/admin/workspaces/{workspaceId}/projects`: cria um projeto associado (`{ "id": "uuid", "slug": "slug-valido", "nome": "Nome" }`).
+- `GET /api/admin/workspaces/{workspaceId}/memberships`: lista os vínculos do workspace.
+- `POST /api/admin/workspaces/{workspaceId}/memberships`: cria ou atualiza um vínculo (`{ "sujeito": "agent-id", "emissor": "https://...", "papel": "Contributor"|"Maintainer"|"Reader" }`).
+- `DELETE /api/admin/workspaces/{workspaceId}/memberships/{vinculoId}`: remove um vínculo pelo identificador.
+
+**Autenticação**: Requer o cabeçalho `X-Admin-Key: <ADMIN_API_KEY>` ou `Authorization: Bearer <ADMIN_API_KEY>` (configurado via variável de ambiente `ADMIN_API_KEY` ou `Sentinel:AdminApiKey`), ou sessão web de usuário com papel `Maintainer`.
+
+## Observabilidade e OpenTelemetry
+- Métricas e Rastreamento distribuído (Tracing) instrumentados via pacotes oficiais do OpenTelemetry (`OpenTelemetry.Extensions.Hosting`, `OpenTelemetry.Instrumentation.AspNetCore`, `Http`, `Runtime`).
+- Ferramentas MCP instrumentadas com métricas de contador: `sentinel_mcp_tool_calls_total` e `sentinel_mcp_tool_errors_total`.
+- Para exportar via OTLP (gRPC / HTTP), defina a variável `OTEL_EXPORTER_OTLP_ENDPOINT` ou `Sentinel:OpenTelemetry:OtlpEndpoint`.
+
+## Regras para agentes que alteram este repositório
+- Regras de negócio e autorização ficam em `ServicoDeMemoria`; não duplique validação nos canais (MCP/web).
+- Projeções devem vir sempre dos redutores; não escreva em `decision_current`, `incident_current` ou `decision_pending_proposals` fora do caminho do redutor.
+- `memory_events` e `memory_payloads` são append-only; mudanças de schema entram como nova migração numerada em `db/migrations` (não edite migrações já aplicadas).
+- Não coloque connection strings, senhas, client secrets ou chaves de API em `appsettings*.json`, no `compose.yaml` ou em fixtures.

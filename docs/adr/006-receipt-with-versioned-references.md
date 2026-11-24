@@ -17,3 +17,9 @@ Quando um agente de IA consulta o Sentinel para tomar uma decisão técnica ou r
 - Retenção padrão declarada de 30 dias para os comprovantes.
 - Separação clara entre a garantia técnica (o que o servidor preparou) e a inferência do agente.
 - **Gatilho de revisão**: Ajustar a janela de retenção ou políticas de expurgo automático de acordo com os requisitos de compliance da organização.
+
+## Estado da implementação (2026-11)
+- Além dos campos listados, o comprovante grava `principal_issuer` e um `digest` SHA-256 canônico dos itens (migração 003). `get_context_receipt` devolve `digest`, `digestAlgorithm: "sha256"` e `integrityVerified`, recalculado pelo servidor a cada leitura. É um controle de integridade, **não uma assinatura digital**: quem tem acesso de escrita ao banco poderia alterar itens e digest juntos.
+- Acesso: o comprovante é visível ao autor da consulta e a Maintainers do workspace; para os demais membros a resposta é `NOT_FOUND`.
+- A retenção de 30 dias é aplicada por um job em segundo plano (`Sentinel:Retention:ReceiptRetentionDays`).
+- O texto da consulta não é armazenado.

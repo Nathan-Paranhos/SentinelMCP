@@ -6,182 +6,147 @@
 
 <p align="center">
   <strong>A Memória da sua Engenharia</strong><br />
-  Governança arquitetural contínua, auditoria imutável via Event Sourcing e protocolo MCP nativo para agentes de inteligência artificial e equipes de engenharia.
+  Decisões técnicas e incidentes versionados como eventos imutáveis, consultados por agentes de IA via MCP e aprovados exclusivamente por pessoas.
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/.NET-9.0_LTS-512BD4?style=flat-square&logo=dotnet&logoColor=white" alt=".NET 9" />
-  <img src="https://img.shields.io/badge/PostgreSQL-16%2B-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL" />
-  <img src="https://img.shields.io/badge/Protocol-MCP_2024--11--05-163832?style=flat-square" alt="MCP Protocol" />
-  <img src="https://img.shields.io/badge/Tests-30%2F30_Passing_(100%25)-235347?style=flat-square" alt="Test Suite" />
-  <img src="https://img.shields.io/badge/Interface-Organic_macOS-8EB69B?style=flat-square" alt="macOS UX" />
-  <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="License MIT" />
+  <img src="https://img.shields.io/badge/.NET-9.0-512BD4?style=flat-square&logo=dotnet&logoColor=white" alt=".NET 9" />
+  <img src="https://img.shields.io/badge/PostgreSQL-16%2B-336791?style=flat-square&logo=postgresql&logoColor=white" alt="PostgreSQL 16+" />
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square" alt="Licença MIT" />
 </p>
 
 ---
 
 ## Sumário
 
-- [Visão Geral](#visão-geral)
-  - [O Problema dos Agentes Autônomos](#o-problema-dos-agentes-autônomos)
-  - [A Solução Sentinel](#a-solução-sentinel)
-- [Pilares de Engenharia](#pilares-de-engenharia)
-- [Arquitetura do Sistema](#arquitetura-do-sistema)
-- [Interface Nativa macOS](#interface-nativa-macos)
-- [Tools MCP Oficiais](#tools-mcp-oficiais)
-- [Integração com Clientes MCP](#integração-com-clientes-mcp)
-  - [Claude Code](#claude-code)
-  - [Cursor IDE](#cursor-ide)
-- [Quick Start](#quick-start)
-  - [Docker Compose](#docker-compose)
-  - [Desenvolvimento Local](#desenvolvimento-local)
-- [Critérios de Aceite (AC-01 a AC-08)](#critérios-de-aceite-ac-01-a-ac-08)
-- [Estrutura da Solução](#estrutura-da-solução)
-- [Segurança & Privacidade](#segurança--privacidade)
+- [Visão geral](#visão-geral)
+- [Arquitetura](#arquitetura)
+- [Tools MCP](#tools-mcp)
+- [Conectando clientes MCP](#conectando-clientes-mcp)
+- [Execução local](#execução-local)
+- [Configuração e segredos](#configuração-e-segredos)
+- [Segurança](#segurança)
+- [Operação](#operação)
+- [Testes](#testes)
+- [Critérios de aceite (AC-01 a AC-08)](#critérios-de-aceite-ac-01-a-ac-08)
+- [Estrutura da solução](#estrutura-da-solução)
+- [Limitações conhecidas e pendências](#limitações-conhecidas-e-pendências)
+- [Documentação complementar](#documentação-complementar)
 - [Licença](#licença)
 
 ---
 
-## 🧭 Visão Geral
+## Visão geral
 
-O **Sentinel-MCP** é um servidor MCP (*Model Context Protocol*) de alta performance em C# sobre .NET 9 LTS que conecta agentes de desenvolvimento (como **Claude Code**, **Cursor**, **Copilot** e agentes autônomos) à memória arquitetural viva e imutável da organização.
+O **Sentinel-MCP** é um servidor MCP (*Model Context Protocol*) em C#/.NET 9 que dá a agentes de desenvolvimento (Claude Code, Cursor e outros clientes MCP) acesso às decisões arquiteturais vigentes e aos incidentes registrados de uma organização.
 
-### O Problema dos Agentes Autônomos
+Problemas que ele ataca:
 
-À medida que equipes de tecnologia escalam a utilização de agentes de IA em fluxos de codificação, análise de incidentes e revisão de PRs, surgem padrões recorrentes de falha de governança:
+1. **Propostas recicladas**: um agente sugere uma abordagem que a equipe já avaliou e descartou.
+2. **Incidentes sem histórico**: um agente analisa uma falha sem ver o RCA e a mitigação de um caso anterior.
+3. **Conhecimento fragmentado**: decisões ficam espalhadas em PRs, chats e ADRs sem indicação de vigência.
 
-1. **Divergência e Propostas Recicladas**: Um agente abre um Pull Request propondo uma abordagem arquitetural que a equipe sênior já avaliou e descartou explicitamente no trimestre anterior.
-2. **Desconexão com o Histórico de Incidentes**: Um agente analisa uma falha crítica em produção sem ter visibilidade do *Root Cause Analysis* (RCA) e da mitigação que já havia sido padronizada para aquele mesmo padrão de defeito.
-3. **Fragmentação do Conhecimento**: Decisões técnicas ficam perdidas em descrições de PRs mesclados, mensagens de chat ou ADRs estáticas em repositórios isolados, sem validação de vigência temporal.
-
-### A Solução Sentinel
-
-O Sentinel estabelece um **ciclo de governança formal e auditável** entre agentes e mantenedores humanos:
+Ciclo de governança:
 
 ```
 ┌─────────────────┐       propose_decision       ┌─────────────────────┐
-│  Agente de IA   │ ───────────────────────────> │  Sentinel MCP Core  │
-│  (Claude Code)  │                              │  (Proposta Gravada) │
+│  Agente de IA   │ ───────────────────────────> │  Sentinel (MCP)     │
+│  (cliente MCP)  │                              │  proposta pendente  │
 └─────────────────┘                              └──────────┬──────────┘
-                                                            │
-                                                     Notificação / Fila
                                                             │
                                                             ▼
-┌─────────────────┐    Aprovação / Rejeição      ┌─────────────────────┐
-│   Mantenedor    │ ───────────────────────────> │  Interface Web      │
-│     Humano      │       (Sessão Segura)        │  (Organic macOS)    │
+┌─────────────────┐   aprovação / rejeição       ┌─────────────────────┐
+│   Mantenedor    │ ───────────────────────────> │  /review            │
+│   (pessoa)      │   sessão web + CSRF          │  (papel Maintainer) │
 └─────────────────┘                              └──────────┬──────────┘
-                                                            │
-                                                Ativação Atômica Vigente
                                                             │
                                                             ▼
 ┌─────────────────┐        query_context         ┌─────────────────────┐
-│  Outro Agente   │ <─────────────────────────── │ Decisão Vigente     │
-│    (Cursor)     │   (Comprovante Criptográfico)│ + Histórico e RCA   │
+│  Outro agente   │ <─────────────────────────── │ Decisão vigente     │
+│                 │  + comprovante (digest)      │ + incidentes        │
 └─────────────────┘                              └─────────────────────┘
 ```
 
----
+Garantias implementadas:
 
-## 🏛️ Pilares de Engenharia
-
-O Sentinel foi construído desde a base para oferecer garantias formais de consistência, concorrência e conformidade:
-
-| Pilar | Mecanismo de Implementação |
+| Garantia | Como é implementada |
 | --- | --- |
-| **Event Sourcing & Imutabilidade** | Cada proposta, aprovação, rejeição ou substituição é persistida como um evento permanente em transação ACID no PostgreSQL. O estado vigente e a busca são reconstruíveis deterministicamente a qualquer momento. |
-| **Controle de Concorrência Otimista** | Escritas no mesmo tópico são serializadas com validação de `expectedVersion`. Se dois agentes tentarem atualizar o mesmo tópico simultaneamente, o servidor rejeita o segundo com `VERSION_CONFLICT`. |
-| **Idempotência Estrita** | Toda operação de escrita exige `idempotencyKey`. Em caso de retentativa ou timeout de rede, o Sentinel reconhece a chave na janela de retenção e devolve o resultado original de forma idempotente, sem duplicar eventos. |
-| **Isolamento Multitenant com RLS** | Segurança estrutural via *Row-Level Security* (RLS) nativo do PostgreSQL. Agentes só conseguem consultar ou propor no escopo do `workspace_id` para o qual possuem credencial autenticada. |
-| **Separação Estrita de Acesso** | Nenhuma decisão é promovida a vigente de forma autônoma. Tokens Bearer MCP de agentes não possuem autorização para aprovação; a validação humana ocorre exclusivamente na interface web protegida por sessão e CSRF. |
-| **Comprovantes Auditáveis de Consulta** | A ferramenta `query_context` gera comprovantes criptográficos (`context_receipts`) que gravam com precisão as versões e IDs das decisões apresentadas ao agente, sem expor ou armazenar prompts e dados confidenciais. |
+| **Histórico imutável** | Cada proposta, aprovação, rejeição, substituição e incidente é um evento em `memory_events` com payload em `memory_payloads`. No PostgreSQL, triggers impedem `UPDATE`, `DELETE` e `TRUNCATE` nessas tabelas. |
+| **Projeções derivadas** | `decision_current`, `incident_current` e `decision_pending_proposals` são sempre calculadas pelo redutor (`RedutorDeDecisao` / `RedutorDeIncidente`) na mesma transação do evento. A reconstrução usa o mesmo redutor. |
+| **Concorrência por tópico** | `expectedVersion` obrigatório; o tópico é travado (`FOR UPDATE`) e divergências retornam `VERSION_CONFLICT`. A primeira proposta usa `INSERT ... ON CONFLICT`. Só existe **uma proposta pendente por tópico**: nova proposta enquanto há pendente retorna `PROPOSAL_PENDING`. |
+| **Idempotência** | Toda escrita exige `idempotencyKey`. Retentativas com os mesmos argumentos devolvem o resultado original; argumentos diferentes retornam `IDEMPOTENCY_KEY_REUSED`. No PostgreSQL, um lock consultivo por chave serializa retentativas concorrentes. |
+| **Isolamento por workspace** | Vínculo ativo (`memberships`) verificado em cada caso de uso; sem vínculo a resposta é `NOT_FOUND`. No PostgreSQL, RLS com `FORCE ROW LEVEL SECURITY` e `app.current_workspace_id` definido por transação. |
+| **Aprovação somente humana** | Nenhuma tool MCP aprova, rejeita ou restaura. Essas ações exigem sessão web, token CSRF e papel Maintainer. |
+| **Comprovante de consulta** | Cada `query_context` grava os itens entregues (IDs e versões, em ordem) com um digest SHA-256 canônico. É um registro de integridade verificável pelo servidor, **não uma assinatura digital**. |
 
 ---
 
-## 📐 Arquitetura do Sistema
-
-O sistema adota os preceitos de **Clean Architecture** e **Domain-Driven Design (DDD)**, com divisão estrita de responsabilidades:
+## Arquitetura
 
 ```mermaid
 flowchart TB
-    subgraph Clientes["Clientes & Consumidores"]
-        A1["Claude Code CLI"]
-        A2["Cursor IDE"]
-        A3["Agentes Autônomos"]
-        H1["Mantenedor Humano"]
+    subgraph Clientes
+        A1["Clientes MCP (Claude Code, Cursor...)"]
+        H1["Mantenedor (navegador)"]
     end
 
-    subgraph ApiLayer["Sentinel.Api (ASP.NET Core / .NET 9)"]
-        direction TB
-        McpEp["/mcp (Streamable HTTP / JSON-RPC 2.0)"]
-        WebRev["/review (macOS App Shell & Auditoria)"]
-        Landing["/ (Landing Page Editorial)"]
-        AuthMid["Identidade & Validação de Escopos (OAuth PKCE)"]
+    subgraph Api["Sentinel.Api (ASP.NET Core / .NET 9)"]
+        McpEp["POST /mcp (JSON-RPC, sem sessão)"]
+        WebRev["/review + /api/review/* (cookie + CSRF)"]
+        Auth["Credenciais de agente: JWT, chave de API ou mock (dev)"]
     end
 
-    subgraph CoreLayer["Sentinel.Core (Domínio & Regras)"]
-        Commands["Comandos CQRS"]
-        Reducers["Redutores Determinísticos"]
-        Invariants["Validadores de Invariantes & Slugs"]
-        Models["Modelos de Domínio & Eventos"]
+    subgraph Core["Sentinel.Core"]
+        Servico["CasosDeUso/ServicoDeMemoria"]
+        Valid["Validacao/ValidadorDeInvariantes"]
+        Red["Redutores (decisão e incidente)"]
+        Contr["Contratos (interfaces de repositório)"]
     end
 
-    subgraph PersistenceLayer["Sentinel.Persistence (PostgreSQL 16+ / Npgsql)"]
-        Trans["Transações ACID & RLS"]
-        Events[("memory_events (Append-only)")]
-        Proj[("decision_current / incident_current")]
-        Receipts[("command_receipts / context_receipts")]
-        FTS["Busca Textual GIN (tsvector)"]
+    subgraph Pers["Sentinel.Persistence"]
+        Mem["EmMemoria (desenvolvimento/testes)"]
+        Pg["PostgreSql (Npgsql, SQL puro, RLS)"]
     end
 
-    A1 -->|Streamable HTTP /mcp| McpEp
-    A2 -->|Streamable HTTP /mcp| McpEp
-    A3 -->|Streamable HTTP /mcp| McpEp
-    H1 -->|Sessão Web Segura + CSRF| WebRev
-    H1 -->|Navegação Editorial| Landing
-
-    McpEp --> AuthMid
-    WebRev --> AuthMid
-    AuthMid --> Commands
-    Commands --> Invariants
-    Commands --> Reducers
-    Reducers --> Trans
-    Trans --> Events
-    Trans --> Proj
-    Trans --> Receipts
-    Trans --> FTS
+    A1 -->|Authorization: Bearer| McpEp
+    H1 -->|OIDC ou login de desenvolvimento| WebRev
+    McpEp --> Auth --> Servico
+    WebRev --> Servico
+    Servico --> Valid
+    Servico --> Red
+    Servico --> Contr
+    Contr --> Mem
+    Contr --> Pg
 ```
 
----
-
-## 🖥️ Interface Nativa macOS
-
-A interface de revisão e governança humana (`/review`) foi desenhada sob os princípios do **Apple Human Interface Guidelines** e do **macOS Sequoia**, proporcionando uma experiência de aplicativo desktop de alta precisão dentro do navegador:
-
-- **Geometria Concêntrica**: Raios proporcionais e hierárquicos (8px, 12px, 16px, 20px, 24px, 28px).
-- **Superfícies Contínuas & Acabamento Fosco**: Zero brilhos artificiais, neon ou cards genéricos.
-- **Sidebar Flutuante Colapsável**: Navegação semântica entre Revisões, Decisões Vigentes, Incidentes, Linha do Tempo e Ferramentas MCP, com contador em tempo real de pendências e indicação de Workspace RLS.
-- **Visualização em Split-View (Apple Notes / Finder)**: Lista compacta e refinada de registros à esquerda com visualização completa de especificações, justificativas técnicas e links de evidência à direita.
-- **Spotlight Command Palette (`⌘K` ou `Ctrl+K`)**: Caixa de busca central inspirada no Raycast/Spotlight para navegação instantânea por teclado, com execução direta de comandos e filtros contextuais.
-- **Painel Inspetor Lateral**: Inspeção de detalhes de auditoria, integridade SHA-256 e proveniência do agente responsável.
-- **Dark Mode & Light Mode**: Paleta botânica equilibrada preservando as cores de identidade do Sentinel:
-  - Preto esverdeado profundo (`#051F20`), Verde floresta (`#0B2B26`), Verde estrutural (`#163832`), Verde de interação (`#235347`), Verde sálvia (`#8EB69B`) e Verde menta suave (`#DAF1DE`).
+- **Uma única camada de casos de uso** (`src/Sentinel.Core/CasosDeUso/ServicoDeMemoria.cs`): validação de entrada (via `ValidadorDeInvariantes`), vínculo e papel no workspace e a regra de que aprovação/rejeição/restauração só aceitam o canal web. O endpoint MCP e a página de revisão apenas autenticam e traduzem.
+- **Contratos de repositório** em `src/Sentinel.Core/Contratos`, com duas implementações: em memória e PostgreSQL.
+- **Armazenamento**: `Sentinel:StorageProvider` = `InMemory` (padrão; não persiste, proibido em Production) ou `PostgreSQL`.
 
 ---
 
-## 🛠️ Tools MCP Oficiais
+## Tools MCP
 
-O Sentinel implementa a especificação oficial do protocolo MCP com suporte a chamadas estruturadas de ferramentas:
-
-| Ferramenta | Descrição | Permissão Exigida |
+| Tool | Descrição | Exige |
 | --- | --- | --- |
-| `propose_decision` | Submete uma nova proposta arquitetural vinculada a um tópico técnico com justificativa e evidências HTTPS. | `write:decision` (Contributor/Maintainer) |
-| `log_incident` | Registra um incidente técnico com relatório circunstanciado, chaves técnicas e evidências de RCA/mitigação. | `write:incident` (Contributor/Maintainer) |
-| `query_context` | Realiza busca textual ponderada em decisões ativas e incidentes, emitindo um comprovante de consulta auditável. | `read:memory` (Reader+) |
-| `get_timeline` | Reconstitui a linha do tempo e estados passados de um tópico a partir da cadeia imutável de eventos. | `read:memory` (Reader+) |
-| `get_context_receipt` | Recupera a lista exata e ordenada de referências e versões disponibilizadas em uma consulta anterior. | `read:memory` (Membro do Workspace) |
+| `propose_decision` | Registra uma proposta num tópico (`topicKey`), com justificativa e evidências HTTPS. Fica pendente até aprovação humana. | escopo `write:decision` + papel Contributor ou Maintainer |
+| `log_incident` | Registra um incidente (`reported`) com chaves técnicas e evidências. | escopo `write:incident` + papel Contributor ou Maintainer |
+| `query_context` | Busca decisões `active` e/ou incidentes `reported` e grava um comprovante. `kind`: `decision` (padrão), `incident` ou `both`; `limit` de 1 a 20 (padrão 10). | escopo `read:memory` + papel Reader ou superior |
+| `get_timeline` | Reconstitui o estado de um fluxo numa versão (`atVersion`, padrão: atual) e lista eventos em ordem decrescente; `limit` de 1 a 50 (padrão 20); use `nextBeforeVersion` como `beforeVersion` para a próxima página. O estado reconstituído independe da página. | escopo `read:memory` + papel Reader ou superior |
+| `get_context_receipt` | Devolve o comprovante de uma consulta: itens ordenados com versões, `digest`, `digestAlgorithm: "sha256"` e `integrityVerified` (o servidor recalcula o digest). | escopo `read:memory`; visível ao autor da consulta e a Maintainers do workspace (demais recebem `NOT_FOUND`) |
 
-### Exemplo: Submetendo uma Proposta (`propose_decision`)
+Erros de tool voltam com `isError: true` e `structuredContent.code` igual a um destes códigos: `VALIDATION_ERROR`, `NOT_FOUND`, `VERSION_CONFLICT`, `PROPOSAL_PENDING`, `IDEMPOTENCY_KEY_REUSED`, `FORBIDDEN`, `UNAUTHORIZED`, `TEMPORARILY_UNAVAILABLE`, `INTERNAL_ERROR`. Em `INTERNAL_ERROR` a mensagem é genérica e traz apenas um ID de correlação; o detalhe fica no log do servidor.
+
+### Busca (`query_context`)
+
+- Candidatos: `search_vector @@ websearch_to_tsquery('portuguese' | 'simple', query)`, chave técnica normalizada igual a uma das palavras da consulta ou à consulta inteira, ou `ILIKE` em título/resumo (com escape de `%` e `_`).
+- Escopo: somente o workspace e o projeto informados; decisões com estado `active` e incidentes `reported`.
+- Ordem determinística: correspondência exata de chave técnica, `ts_rank_cd`, data (desc.) e ID.
+- `search_vector` e `technical_keys_norm` são colunas geradas com índice GIN (migração 003).
+
+### Exemplo: `propose_decision`
+
+IDs do conjunto de demonstração (`--seed-demo` / InMemory em Development): workspace `11111111-1111-1111-1111-111111111111`, projeto `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`.
 
 ```json
 {
@@ -192,19 +157,15 @@ O Sentinel implementa a especificação oficial do protocolo MCP com suporte a c
     "name": "propose_decision",
     "arguments": {
       "workspaceId": "11111111-1111-1111-1111-111111111111",
-      "projectId": "22222222-2222-2222-2222-222222222222",
-      "topicKey": "payment-idempotency",
-      "expectedVersion": 1,
-      "title": "Chave de Idempotência Obrigatória na Cobrança Pix",
-      "summary": "Toda requisição de criação de cobrança Pix deve obrigatoriamente incluir cabeçalho X-Idempotency-Key com retenção mínima de 24 horas.",
-      "rationale": "Elimina concorrência e cobranças duplicadas em retentativas incertas de gateway.",
+      "projectId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "topicKey": "pix-idempotency",
+      "expectedVersion": 0,
+      "title": "Chave de idempotência obrigatória na cobrança Pix",
+      "summary": "Toda criação de cobrança Pix deve enviar X-Idempotency-Key com retenção mínima de 24 horas.",
+      "rationale": "Evita cobranças duplicadas em retentativas incertas do gateway.",
       "technicalKeys": ["pix", "idempotency", "billing"],
       "evidence": [
-        {
-          "type": "adr",
-          "label": "ADR 003 — Idempotência de Pagamentos",
-          "url": "https://example.com/adr/003-payment-idempotency"
-        }
+        { "type": "adr", "label": "ADR de idempotência de pagamentos", "url": "https://example.com/adr/003-payment-idempotency" }
       ],
       "idempotencyKey": "prop-pix-idem-001"
     }
@@ -212,7 +173,9 @@ O Sentinel implementa a especificação oficial do protocolo MCP com suporte a c
 }
 ```
 
-### Exemplo: Consultando Contexto com Comprovante (`query_context`)
+`expectedVersion` é `0` para um tópico novo; para um tópico existente, informe a versão atual do fluxo (obtida, por exemplo, com `get_timeline`).
+
+### Exemplo: `query_context`
 
 ```json
 {
@@ -223,24 +186,32 @@ O Sentinel implementa a especificação oficial do protocolo MCP com suporte a c
     "name": "query_context",
     "arguments": {
       "workspaceId": "11111111-1111-1111-1111-111111111111",
-      "projectId": "22222222-2222-2222-2222-222222222222",
-      "query": "idempotency pix",
-      "kind": "decision",
+      "projectId": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "query": "idempotency",
+      "kind": "both",
       "limit": 5
     }
   }
 }
 ```
 
-O servidor retorna o resultado correspondente acompanhado de um `queryId` persistido na tabela `context_receipts`, garantindo que auditorias possam inspecionar exatamente qual versão da decisão o modelo consumiu.
+A resposta traz `queryId`, `matchStatus` (`found` ou `none`), `searchMode` (`textual`) e `items` com IDs, versões, estado, resumo e evidências. O `queryId` pode ser usado depois em `get_context_receipt`. O comprovante não guarda o texto da consulta.
 
 ---
 
-## 🔌 Integração com Clientes MCP
+## Conectando clientes MCP
+
+O endpoint é `POST /mcp` (Streamable HTTP em modo sem sessão, respostas JSON). **Toda requisição precisa de `Authorization: Bearer <token>`**; veja em [Credenciais de agente](#credenciais-de-agente) quais tokens são aceitos. Em desenvolvimento, use um token mock, por exemplo `mock:agent-dev-1|read:memory,write:decision,write:incident|claude-code`.
 
 ### Claude Code
 
-Para conectar o Sentinel ao **Claude Code CLI**, configure seu arquivo de configuração MCP (`~/.claude.json` ou `claude_desktop_config.json`):
+```bash
+claude mcp add --transport http sentinel http://localhost:5000/mcp --header "Authorization: Bearer <token>"
+```
+
+### Cursor
+
+Em `.cursor/mcp.json`:
 
 ```json
 {
@@ -248,166 +219,322 @@ Para conectar o Sentinel ao **Claude Code CLI**, configure seu arquivo de config
     "sentinel": {
       "url": "http://localhost:5000/mcp",
       "headers": {
-        "Authorization": "Bearer sentinel-dev-agent-key"
+        "Authorization": "Bearer <token>"
       }
     }
   }
 }
 ```
 
-Ou via linha de comando:
-
-```bash
-claude mcp add sentinel -- http://localhost:5000/mcp
-```
-
-### Cursor IDE
-
-No **Cursor**, adicione nas configurações de MCP (`.cursor/mcp.json`):
-
-```json
-{
-  "mcpServers": {
-    "sentinel": {
-      "url": "http://localhost:5000/mcp",
-      "transport": "http"
-    }
-  }
-}
-```
+Não versione arquivos com tokens reais. O servidor não implementa fluxo OAuth próprio: quando JWT está configurado, o cliente obtém o token no provedor de identidade e o envia no cabeçalho.
 
 ---
 
-## 🚀 Quick Start
+## Execução local
 
-### Docker Compose
+Pré-requisitos: .NET 9 SDK; Docker (para o compose e para os testes de PostgreSQL).
 
-A forma mais rápida de subir o ambiente completo com PostgreSQL 16 e Sentinel API:
+> **Ambiente:** o projeto não tem `launchSettings.json`, então `dotnet run` sobe em **Production** por padrão, onde o armazenamento padrão é PostgreSQL e a API recusa iniciar sem `ConnectionStrings:Database`. Para desenvolvimento, defina `ASPNETCORE_ENVIRONMENT=Development`.
+
+### Opção 1: InMemory (Development)
+
+`appsettings.Development.json` já habilita: armazenamento InMemory com dados de demonstração, tokens mock (`Sentinel:AllowMockTokens`) e login de desenvolvimento (`Sentinel:Web:EnableDevLogin`).
 
 ```bash
-# 1. Clone o repositório
-git clone https://github.com/Nathan-Paranhos/SentinelMCP.git
-cd SentinelMCP
+# bash
+ASPNETCORE_ENVIRONMENT=Development dotnet run --project src/Sentinel.Api
+```
 
-# 2. Inicialize os containers
-docker compose up -d --build
+```powershell
+# PowerShell
+$env:ASPNETCORE_ENVIRONMENT = "Development"
+dotnet run --project src/Sentinel.Api
+```
 
-# 3. Verifique a saúde do serviço
+A API escuta em `http://localhost:5000`. Os dados somem ao encerrar o processo.
+
+- Landing: `http://localhost:5000/`
+- Revisão: `http://localhost:5000/review` → redireciona para `/auth/login`. Informe o sujeito `maintainer-alice` (Maintainer). Também existem `reader-bob` (Reader) e `agent-dev-1` (Contributor) no workspace de demonstração.
+- Agente (token mock): `mock:agent-dev-1|read:memory,write:decision,write:incident|meu-cliente`.
+
+Formato do token mock: `mock:sujeito|escopo1,escopo2|clientId|emissor`. Campos após o sujeito são opcionais (sem escopos, todos são concedidos; emissor padrão `https://auth.sentinel.dev`, o mesmo das fixtures). O papel vem do vínculo do sujeito no workspace, não do token.
+
+Smoke test:
+
+```bash
 curl http://localhost:5000/healthz
+curl -X POST http://localhost:5000/mcp \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer mock:agent-dev-1|read:memory|smoke" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"smoke","version":"1.0"}}}'
 ```
 
-Acesse no seu navegador:
-- **Painel de Governança macOS**: `http://localhost:5000/review`
-- **Landing Page Editorial**: `http://localhost:5000/`
-
-### Desenvolvimento Local
-
-Pré-requisitos:
-- **.NET 9.0 SDK** ou superior (`dotnet --version`)
-- **PostgreSQL 16+** (opcional, o sistema inclui persistência em memória para desenvolvimento e testes)
+### Opção 2: Docker Compose com PostgreSQL
 
 ```bash
-# Compilar a solução completa
-dotnet build Sentinel.sln
-
-# Executar a API com dados de demonstração semeados
-dotnet run --project src/Sentinel.Api --urls "http://localhost:5000" --seed-demo
+cp .env.example .env          # defina POSTGRES_PASSWORD e SENTINEL_APP_DB_PASSWORD
+docker compose up -d --build
+curl http://localhost:5000/readyz
 ```
 
-### Executando os Testes Automatizados
+Serviços:
 
-A suíte de testes valida unitariamente e integradamente todos os critérios da solução:
+| Serviço | Função |
+| --- | --- |
+| `postgres` | PostgreSQL. Na **primeira** inicialização do volume, `db/docker/01-create-app-role.sh` cria o papel `sentinel_app` (NOLOGIN, sem BYPASSRLS) e o login `sentinel_app_login` com a senha do `.env`. |
+| `sentinel-migrate` | Execução única de `--migrate` usando o superusuário (`ConnectionStrings__DatabaseAdmin`). |
+| `sentinel-api` | API conectada como `sentinel_app_login` (sujeita a RLS). Sobe só depois que `sentinel-migrate` termina com sucesso. |
+
+- As portas ficam presas em `127.0.0.1` (5000 e 5432).
+- `ASPNETCORE_ENVIRONMENT` padrão no compose é `Development` (tokens mock e login de desenvolvimento ativos). Altere no `.env` para outros cenários.
+- O banco sobe **vazio** (sem workspaces). Para carregar os dados de demonstração:
 
 ```bash
-# Executar todos os 30 testes da solução
-dotnet test Sentinel.sln --logger "console;verbosity=normal"
-
-# Executar apenas testes de integração e critérios de aceite
-dotnet test tests/Sentinel.IntegrationTests
-
-# Executar testes de contrato do protocolo MCP
-dotnet test tests/Sentinel.ContractTests
-
-# Executar testes unitários de domínio e invariantes
-dotnet test tests/Sentinel.UnitTests
+docker compose exec -T postgres psql -U postgres -d sentinel_mcp -v ON_ERROR_STOP=1 < db/fixtures/001_seed_demo.sql
+docker compose run --rm sentinel-migrate --rebuild-projections
 ```
+
+  A fixture insere apenas fontes da verdade (workspaces, vínculos, fluxos, payloads, eventos); a reconstrução gera as projeções. Alternativa: `docker compose run --rm sentinel-migrate --seed-demo` aplica a fixture e reconstrói, mas **continua rodando** a API dentro do container avulso; encerre com Ctrl+C depois da mensagem de conclusão.
+
+### Opções de linha de comando
+
+Sempre separe os argumentos da aplicação com `--` no `dotnet run`. Na imagem Docker, passe-os direto ao entrypoint (por exemplo `command: ["--migrate"]`).
+
+| Comando | Efeito |
+| --- | --- |
+| `dotnet run --project src/Sentinel.Api -- --migrate` | Só com `Sentinel:StorageProvider=PostgreSQL`. Aplica migrações pendentes de `db/migrations` com a conexão admin, sob lock consultivo; se aplicou a `003`, reconstrói as projeções. Depois **sai**. |
+| `dotnet run --project src/Sentinel.Api -- --seed-demo` | InMemory: popula os dados de demonstração. PostgreSQL: aplica `db/fixtures` com a conexão admin e reconstrói projeções. Depois **continua rodando** a API. |
+| `dotnet run --project src/Sentinel.Api -- --rebuild-projections [--workspace-id <uuid>]` | Reconstrói as projeções a partir dos eventos (todos os workspaces ou um) e **sai**. Usa `ConnectionStrings:Database`. |
+
+Não existe endpoint HTTP de manutenção (não há `/ops/...` nem chave administrativa). `Sentinel:AutoMigrate=true` migra na subida da API, mas exige que o processo da API tenha a conexão admin; não é recomendado em produção.
 
 ---
 
-## ✅ Critérios de Aceite (AC-01 a AC-08)
+## Configuração e segredos
 
-Todos os 8 critérios de aceite rigorosos da arquitetura são validados e cobertos por testes automatizados em `tests/Sentinel.IntegrationTests/AcceptanceCriteriaTests.cs`:
+Nenhuma connection string, senha, client secret ou chave fica nos `appsettings*.json`. Forneça-os por variável de ambiente (separador `__`, por exemplo `ConnectionStrings__Database`) ou por um cofre de segredos.
 
-| Critério | Descrição e Validação Formal | Situação |
+| Chave | Padrão | Descrição |
 | --- | --- | --- |
-| **AC-01** | **Interoperabilidade**: Handshake inicial, negociação de protocolo e execução de chamadas MCP em conformidade com o padrão oficial. | **Aprovado** (100%) |
-| **AC-02** | **Concorrência no Mesmo Tópico**: 10 comandos concorrentes de proposta disputando o mesmo tópico. Exatamente 1 obtém sucesso e 9 recebem conflito de versão controlado. | **Aprovado** (100%) |
-| **AC-03** | **Independência entre Tópicos**: 10 tópicos técnicos distintos avançando em paralelo sem bloqueio mútuo, obtendo 100% de sucesso. | **Aprovado** (100%) |
-| **AC-04** | **Idempotência & Commit Incerto**: Reenvio de comando após incerteza de rede retorna o resultado original sem duplicar eventos. Reuso de chave com payload diferente gera `IDEMPOTENCY_KEY_REUSED`. | **Aprovado** (100%) |
-| **AC-05** | **Isolamento & Separação de Revisão**: Isolamento estrito entre workspaces. Rejeição de tokens Bearer MCP na rota de aprovação humana `/api/review/approve`. | **Aprovado** (100%) |
-| **AC-06** | **Vigência, Substituição & Recibos**: Ciclo completo de propor, aprovar, substituir com atomicidade e reconstituir a linha do tempo preservando o comprovante original. | **Aprovado** (100%) |
-| **AC-07** | **Qualidade de Busca & Latência**: Priorização determinística de identificadores técnicos exatos (`technicalKeys`) com resposta em milissegundos. | **Aprovado** (100%) |
-| **AC-08** | **Recuperação & Reprodução**: Reconstrução total das projeções de leitura a partir da tabela imutável de eventos via redutor determinístico. | **Aprovado** (100%) |
+| `Sentinel:StorageProvider` | `InMemory` (`PostgreSQL` em `appsettings.Production.json`) | `InMemory` ou `PostgreSQL`. |
+| `Sentinel:AllowInMemoryInProduction` | `false` | Permite InMemory em Production (não recomendado). |
+| `Sentinel:SeedDemoData` | `false` (`true` em Development) | Popula dados de demonstração no InMemory. |
+| `ConnectionStrings:Database` | — | Login de **menor privilégio** (membro de `sentinel_app`, sem superusuário/BYPASSRLS). Obrigatória com PostgreSQL, inclusive para `--migrate`. |
+| `ConnectionStrings:DatabaseAdmin` | usa `Database` | Conexão para DDL, migrações e fixtures. |
+| `Sentinel:AutoMigrate` | `false` | Migra ao iniciar a API. |
+| `Sentinel:Database:AllowPrivilegedRole` | `false` | Em Production, permite iniciar mesmo se o login da API ignora RLS (não recomendado). |
+| `Sentinel:AllowMockTokens` | `false` (`true` em Development) | Aceita tokens `mock:`. Sempre ignorado em Production. |
+| `Sentinel:Web:EnableDevLogin` | `false` (`true` em Development) | Formulário de login de desenvolvimento. Sempre ignorado em Production. |
+| `Sentinel:Web:DevLoginIssuer` | `https://auth.sentinel.dev` | Emissor atribuído às sessões do login de desenvolvimento. |
+| `Sentinel:ApiKeys` | `[]` | Chaves de API de agentes (ver abaixo). |
+| `Sentinel:Mcp:AllowedOrigins` | `[]` | Origens aceitas no cabeçalho `Origin` do `/mcp`, além da própria. |
+| `Authentication:Mcp:Authority` | vazio | Emissor dos JWT de agentes. Vazio desabilita JWT e o endpoint `/.well-known/oauth-protected-resource`. |
+| `Authentication:Mcp:Audience` | `sentinel-mcp` | Audiência exigida no JWT. |
+| `Authentication:Web:Authority` / `ClientId` / `ClientSecret` | vazio | OIDC da página de revisão. `ClientSecret` só por cofre/variável de ambiente. |
+| `Authentication:Web:Issuer` | `Authority` | Emissor usado no vínculo quando o token OIDC não traz `iss`. |
+| `Sentinel:RateLimit:McpPerMinute` / `WebPerMinute` / `LoginPerMinute` | `300` / `120` / `20` | Limites por janela de 1 minuto. |
+| `Sentinel:Retention:Enabled` / `ReceiptRetentionDays` / `IntervalMinutes` | `true` / `30` / `360` | Job que expurga `command_receipts` e `context_receipts` antigos. |
+
+### Chaves de API de agentes
+
+Só o hash SHA-256 (hexadecimal) da chave fica na configuração; a chave em si é entregue ao agente. A comparação é feita em tempo constante.
+
+Gerar uma chave e o hash no **PowerShell 7+**:
+
+```powershell
+$chave = [Convert]::ToHexString([Security.Cryptography.RandomNumberGenerator]::GetBytes(32)).ToLowerInvariant()
+$hash  = [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($chave))).ToLowerInvariant()
+$hash   # vai para a configuração; guarde $chave no cofre e entregue ao agente
+```
+
+No **bash**:
+
+```bash
+CHAVE=$(openssl rand -hex 32)
+printf '%s' "$CHAVE" | sha256sum | cut -d' ' -f1   # hash para a configuração
+```
+
+Configuração (por variáveis de ambiente, uma entrada por índice):
+
+```bash
+Sentinel__ApiKeys__0__Nome=agente-ci
+Sentinel__ApiKeys__0__KeySha256=<hash hex>
+Sentinel__ApiKeys__0__Subject=agent-ci
+Sentinel__ApiKeys__0__Issuer=https://sentinel.local/api-keys
+Sentinel__ApiKeys__0__ClientId=ci-pipeline
+Sentinel__ApiKeys__0__Scopes__0=read:memory
+Sentinel__ApiKeys__0__Scopes__1=write:incident
+```
+
+`Subject` e `Issuer` precisam corresponder a um vínculo ativo em `memberships` do workspace; o papel vem desse vínculo. O agente envia `Authorization: Bearer <chave>`.
 
 ---
 
-## 📁 Estrutura da Solução
+## Segurança
+
+### Credenciais de agente (`/mcp`)
+
+Toda requisição com `id` exige `Authorization: Bearer`. Sem credencial válida a resposta é **401** com `WWW-Authenticate` (inclui `resource_metadata` quando JWT está configurado). Ordem de verificação:
+
+1. **Chave de API** de `Sentinel:ApiKeys` (hash SHA-256, comparação em tempo constante).
+2. **Token mock** `mock:...`, aceito somente com `Sentinel:AllowMockTokens=true` e ambiente diferente de Production.
+3. **JWT**, quando `Authentication:Mcp:Authority` está configurado: valida emissor, audiência, assinatura e expiração. Escopos vêm das claims `scope`/`scp`; a identidade é `iss` + `sub`; `client_id`/`azp` são registrados como cliente.
+
+Escopos: `read:memory`, `write:decision`, `write:incident`. O **papel** (Reader, Contributor, Maintainer) vem do vínculo em `memberships`, não do token. Sem vínculo no workspace: `NOT_FOUND`. Papel ou escopo insuficiente: `FORBIDDEN`.
+
+O servidor atua apenas como *resource server*: expõe `/.well-known/oauth-protected-resource` (RFC 9728) quando JWT está configurado, mas não implementa autorização OAuth, PKCE ou emissão de tokens para agentes.
+
+### Endpoint `/mcp`
+
+- Modo sem sessão: só `POST`. `GET` e `DELETE` retornam **405**.
+- Versões suportadas: `2025-06-18`, `2025-03-26`, `2024-11-05`. No `initialize`, a versão pedida é ecoada se suportada; senão, o servidor oferece a mais recente. Cabeçalho `MCP-Protocol-Version` não suportado retorna 400.
+- Notificações (sem `id`) recebem **202** sem corpo. Lotes JSON-RPC não são suportados.
+- Cabeçalho `Origin`, quando presente, precisa ser a própria origem ou constar em `Sentinel:Mcp:AllowedOrigins`; senão **403**.
+
+### Revisão humana (`/review`)
+
+- `GET /review` (e `/app`) exige sessão web (cookie `sentinel_session`, HttpOnly, 8 h com renovação); sem sessão redireciona para `/auth/login`.
+- Login: OIDC (authorization code + PKCE, `Authentication:Web:*`, callback `/auth/callback`) ou, fora de Production com `Sentinel:Web:EnableDevLogin=true`, o formulário de desenvolvimento (`GET /auth/login` → `POST /auth/dev-login`). Sem nenhum dos dois, `/auth/login` responde 503. Logout: `POST /auth/logout`.
+- Dados: `GET /api/review/state?workspaceId=` mostra apenas workspaces em que a identidade tem vínculo ativo.
+- Ações: `POST /api/review/approve`, `/reject` e `/restore` exigem cookie, cabeçalho `X-CSRF-Token` (antiforgery do ASP.NET Core) e papel Maintainer. Qualquer cabeçalho `Authorization` nessas rotas resulta em **403**. Rejeição exige motivo (1 a 1000 caracteres), gravado no evento. Restaurar cria uma nova proposta a partir de uma versão anterior, que ainda precisa ser aprovada.
+
+### Banco de dados
+
+- Cada operação roda numa transação com `set_config('app.current_workspace_id', ..., true)`.
+- A migração `003` aplica `FORCE ROW LEVEL SECURITY`, cria o papel `sentinel_app` (NOLOGIN, sem BYPASSRLS) com GRANTs mínimos, torna `memory_events`/`memory_payloads` append-only por trigger e troca as FKs de eventos/payloads para `ON DELETE RESTRICT`.
+- Em Production a API recusa iniciar se o login de `ConnectionStrings:Database` for superusuário ou tiver BYPASSRLS (salvo `Sentinel:Database:AllowPrivilegedRole=true`); fora de Production, apenas registra um aviso.
+
+### Entrada e resposta
+
+- Evidências: no máximo 10 por registro, URL HTTPS absoluta, sem credenciais embutidas (`user:pass@`) e sem parâmetros como `token=`, `secret=`, `password=`, `key=`, `api_key=`, `access_token=`.
+- Limites de tamanho em título, resumo, justificativa, chaves técnicas, consulta e chave de idempotência (`ValidadorDeInvariantes`).
+- Comprovantes não armazenam o texto da consulta, o prompt ou a conversa.
+- Cabeçalhos: CSP sem script inline (`script-src 'self'`), `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, HSTS fora de Development.
+- Handler global de exceções devolve `INTERNAL_ERROR` com ID de correlação, sem detalhes internos.
+
+---
+
+## Operação
+
+- `GET /healthz`: liveness (`{"status":"Healthy"}`).
+- `GET /readyz`: verifica o armazenamento; 503 (`NotReady`) se o banco falhar. A imagem `aspnet` não tem `curl`; use o probe do orquestrador.
+- Logs via `ILogger`, em JSON fora de Development.
+- Rate limit por credencial (hash do cabeçalho `Authorization`) ou IP; login limitado por IP.
+- Retenção: job em segundo plano expurga `command_receipts` e `context_receipts` mais antigos que `Sentinel:Retention:ReceiptRetentionDays` (30 dias por padrão). Após o expurgo, uma retentativa com a mesma `idempotencyKey` é tratada como comando novo.
+- Runbooks: [deploy e migrações](docs/runbooks/deployment-and-migrations.md) e [recuperação e reconstrução](docs/runbooks/disaster-recovery-and-rebuild.md).
+
+---
+
+## Testes
+
+```bash
+dotnet test Sentinel.sln                       # tudo
+dotnet test tests/Sentinel.UnitTests           # domínio, redutores, validação, idempotência, casos de uso
+dotnet test tests/Sentinel.ContractTests       # protocolo MCP e schemas das tools
+dotnet test tests/Sentinel.IntegrationTests    # AC-01 a AC-08 por HTTP
+```
+
+- `tests/Sentinel.IntegrationTests` roda os mesmos critérios de aceite contra **InMemory** e contra **PostgreSQL 16 via Testcontainers** (Docker necessário). No PostgreSQL a aplicação conecta como um login sem privilégios (membro de `sentinel_app`), e há testes específicos de RLS e de imutabilidade do log de eventos.
+- Sem Docker, os testes de PostgreSQL são **ignorados**. Com `SENTINEL_REQUIRE_DOCKER=1` (definido no CI) eles **falham** em vez de serem ignorados.
+- O CI (`.github/workflows/ci.yml`) compila com `-warnaserror` e executa as três suítes no `ubuntu-latest`.
+
+---
+
+## Critérios de aceite (AC-01 a AC-08)
+
+Implementados em `tests/Sentinel.IntegrationTests/CriteriosDeAceite.cs`. O resultado de cada execução está no CI; este README não mantém um placar estático.
+
+| Critério | O que o teste verifica |
+| --- | --- |
+| **AC-01** Interoperabilidade | `initialize`, `tools/list` e chamada de tool via HTTP. |
+| **AC-02** Concorrência no mesmo tópico | 10 propostas concorrentes no mesmo tópico: 1 sucesso e 9 conflitos controlados. |
+| **AC-03** Independência entre tópicos | 10 tópicos distintos em paralelo, todos com sucesso. |
+| **AC-04** Idempotência | Retentativas sequenciais e concorrentes devolvem o resultado original; reuso da chave com argumentos diferentes retorna `IDEMPOTENCY_KEY_REUSED`. |
+| **AC-05** Isolamento e revisão | `NOT_FOUND` entre workspaces; rotas de revisão recusam token MCP e sessão forjada; painel mostra só workspaces do usuário; evidência com esquema perigoso é recusada. |
+| **AC-06** Vigência e histórico | Propor, aprovar, substituir; linha do tempo e comprovante preservam a versão anterior. |
+| **AC-07** Qualidade e latência | Chave técnica exata vem primeiro; p95 de 20 consultas abaixo de 500 ms, medido ponta a ponta via HTTP no servidor de teste (`WebApplicationFactory`). |
+| **AC-08** Recuperação | Reconstrução das projeções reproduz o mesmo estado. |
+
+---
+
+## Estrutura da solução
 
 ```
-sentinel-mcp/
+.
 ├── src/
-│   ├── Sentinel.Core/              # Domínio, Invariantes, Eventos, Redutores e Comandos CQRS
-│   │   ├── Comandos/               # Modelos de comando (Propor, Aprovar, Rejeitar, Restaurar)
-│   │   ├── Eventos/                # Envelopes de eventos imutáveis de domínio
-│   │   ├── Invariantes/            # Validadores de títulos, slugs, chaves e URLs de evidência
-│   │   ├── Modelos/                # Entidades e registros de domínio
-│   │   └── Redutores/              # Redutor determinístico de estado temporal
-│   │
-│   ├── Sentinel.Persistence/       # Persistência com PostgreSQL / SQL puro e Em Memória
-│   │   ├── Contratos/              # Interfaces de repositórios desacopladas
-│   │   ├── EmMemoria/              # Implementação de desenvolvimento e testes rápidos
-│   │   └── PostgreSql/             # Repositório PostgreSQL com Npgsql, RLS e transações ACID
-│   │
-│   └── Sentinel.Api/               # Servidor MCP, Interface macOS e Handlers Web
-│       ├── Auth/                   # Contexto de segurança, papéis e validação OAuth
-│       ├── Mcp/                    # Dispatcher e transporte Streamable HTTP do protocolo MCP
-│       ├── WebReview/              # Handlers da interface web e endpoints de revisão
-│       └── wwwroot/                # Design System Organic macOS (CSS modular, JS e SVG)
-│           ├── css/                # tokens.css, app-shell.css, components.css, views.css, landing.css
-│           ├── js/                 # app.js, store.js, command-palette.js, icons.js
-│           └── sentinel-verde.svg  # Identidade visual oficial
-│
+│   ├── Sentinel.Core/
+│   │   ├── CasosDeUso/        # ServicoDeMemoria: camada única de casos de uso
+│   │   ├── Comandos/          # Comandos de escrita
+│   │   ├── Comum/             # Relógio e utilitários
+│   │   ├── Consultas/         # Modelos de consulta e resultado
+│   │   ├── Contratos/         # Interfaces de repositório (IRepositorios.cs)
+│   │   ├── Excecoes/          # Exceções de domínio com códigos de erro estáveis
+│   │   ├── Modelos/           # Entidades, enumeradores e evidência
+│   │   ├── Redutores/         # RedutorDeDecisao e RedutorDeIncidente
+│   │   └── Validacao/         # ValidadorDeInvariantes
+│   ├── Sentinel.Persistence/
+│   │   ├── Comum/             # Ajudante de idempotência (hash de argumentos)
+│   │   ├── EmMemoria/         # Repositório em memória (dev/testes)
+│   │   └── PostgreSql/        # Repositório Npgsql e migrador
+│   └── Sentinel.Api/
+│       ├── Admin/             # API REST /api/admin/* para gestão de workspaces, projetos e vínculos
+│       ├── Auth/              # Identidade de agentes (chave de API, mock, JWT) e escopos
+│       ├── Mcp/               # Endpoint /mcp (JSON-RPC e ModelContextProtocol), dispatcher e schemas das tools
+│       ├── Operacao/          # Diagnósticos OpenTelemetry e job de retenção
+│       ├── WebReview/         # Página e API de revisão humana
+│       ├── wwwroot/           # Landing, CSS e JS (sem script inline)
+│       └── Program.cs         # Composição, CLI, autenticação e pipeline HTTP
 ├── tests/
-│   ├── Sentinel.UnitTests/         # Testes de invariantes, validadores, redutores e idempotência
-│   ├── Sentinel.ContractTests/     # Testes de conformidade do protocolo MCP e schemas de tools
-│   └── Sentinel.IntegrationTests/  # Testes de integração cobrindo os critérios AC-01 a AC-08
-│
+│   ├── Sentinel.UnitTests/
+│   ├── Sentinel.ContractTests/
+│   └── Sentinel.IntegrationTests/
 ├── db/
-│   └── migrations/                 # Migrações SQL idempotentes do banco PostgreSQL
-│
-├── docker-compose.yml              # Orquestração conteinerizada da API e PostgreSQL
-├── Dockerfile                      # Build multi-stage para .NET 9
-├── AGENTS.md                       # Diretrizes de execução repetível para desenvolvedores e agentes
-└── README.md                       # Documentação principal da solução
+│   ├── migrations/            # 001 schema, 002 RLS, 003 segurança/busca/integridade
+│   ├── fixtures/              # Dados de demonstração idempotentes
+│   └── docker/                # Script de criação do papel/login no compose
+├── docs/
+│   ├── adr/                   # Decisões de arquitetura
+│   ├── design/SDD.md          # Documento de design
+│   └── runbooks/              # Deploy, migrações e recuperação
+├── compose.yaml
+├── Dockerfile
+├── .env.example
+└── AGENTS.md
 ```
 
----
+### Página de revisão
 
-## 🛡️ Segurança & Privacidade
-
-- **Princípio do Menor Privilégio**: Três papéis distintos de autorização — `Reader` (apenas leitura de decisões e histórico), `Contributor` (submissão de propostas e incidentes) e `Maintainer` (aprovação, rejeição e governança estrutural).
-- **Zero Retenção de Prompts**: Os comprovantes de consulta (`context_receipts`) preservam exclusivamente os identificadores técnicos e versões das decisões disponibilizadas, sem reter perguntas, resumos de conversas ou código proprietário do usuário.
-- **Validação Estrita de Evidências**: URLs anexadas como evidência técnica exigem protocolo seguro HTTPS e passam por sanitização contra inclusão acidental de credenciais embutidas (`user:pass@host`) ou parâmetros sensíveis de autenticação.
-- **Proteção CSRF**: A interface web de revisão exige cabeçalhos `X-CSRF-Token` validados por cookie HTTP seguro para qualquer mutação de estado.
+A interface em `/review` (`src/Sentinel.Api/WebReview/review.html` + `wwwroot/js/`) lista propostas pendentes com a decisão vigente ao lado, decisões vigentes, incidentes e eventos recentes; tem paleta de comandos (`Ctrl+K` / `⌘K`) e tema claro/escuro. Os scripts são servidos de `wwwroot/js/`, sem handlers inline nem CDN. `wwwroot/index.html` é uma landing estática.
 
 ---
 
-## 📄 Licença
+## Recursos Administrativos e Observabilidade
 
-Este projeto é distribuído sob os termos da licença **MIT**. Consulte o arquivo [LICENSE](LICENSE) para obter detalhes.
+- **API de Administração (`/api/admin/*`)**: Gestão de workspaces, projetos e vínculos sem dependência de scripts SQL diretos. Suporta `X-Admin-Key`, Bearer token com `ADMIN_API_KEY` ou sessão web de mantenedor.
+- **OpenTelemetry**: Tracing distribuído e métricas integradas para ASP.NET Core, HttpClient, Runtime e contadores de chamadas/erros de tools MCP. Exportação OTLP via `OTEL_EXPORTER_OTLP_ENDPOINT` ou `Sentinel:OpenTelemetry:OtlpEndpoint`.
+- **SDK MCP e Schemas**: Integração com `ModelContextProtocol.AspNetCore` e publicação completa de `inputSchema` e `outputSchema` para todas as ferramentas.
+- **Segurança de Conteúdo (CSP)**: CSP estrita aplicada globalmente a todas as páginas HTML servidas, sem exceções de scripts inline ou bibliotecas de terceiros via CDN.
 
 ---
 
-<p align="center">
-  Desenvolvido com rigor técnico para viabilizar autonomia segura em engenharia de software aumentada por inteligência artificial.
-</p>
+## Limitações conhecidas e pendências
+
+- **Sem emissor OAuth próprio**: o Sentinel valida JWT de provedores OIDC terceiros, mas não atua como Authorization Server nem emite tokens.
+- **Busca sem `unaccent`**: termos com e sem acento podem não se casar (o dicionário `portuguese` não remove acentos). Não há busca vetorial.
+- **Linha do tempo pagina em memória**: `get_timeline` carrega todos os eventos do fluxo e pagina na aplicação; fluxos muito longos custam proporcionalmente.
+- **Migrações só para frente**: não há scripts de reversão; o rollback é por restauração de backup (ver runbook).
+
+---
+
+## Documentação complementar
+
+- [AGENTS.md](AGENTS.md): comandos para agentes e desenvolvedores.
+- [docs/adr](docs/adr): decisões de arquitetura (cada ADR traz uma nota de estado da implementação quando diverge do código).
+- [docs/design/SDD.md](docs/design/SDD.md): documento de design.
+- [docs/runbooks](docs/runbooks): deploy, migrações, recuperação e reconstrução.
+
+---
+
+## Licença
+
+Distribuído sob a licença **MIT**. Veja [LICENSE](LICENSE).
