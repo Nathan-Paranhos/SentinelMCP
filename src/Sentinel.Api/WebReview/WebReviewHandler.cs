@@ -10,11 +10,16 @@ namespace Sentinel.Api.WebReview;
 public sealed class WebReviewHandler
 {
     private readonly IRepositorioDecisao _repositorioDecisao;
+    private readonly IRepositorioIncidente _repositorioIncidente;
     private readonly IRepositorioEspacoTrabalho _repositorioEspacoTrabalho;
 
-    public WebReviewHandler(IRepositorioDecisao repositorioDecisao, IRepositorioEspacoTrabalho repositorioEspacoTrabalho)
+    public WebReviewHandler(
+        IRepositorioDecisao repositorioDecisao,
+        IRepositorioIncidente repositorioIncidente,
+        IRepositorioEspacoTrabalho repositorioEspacoTrabalho)
     {
         _repositorioDecisao = repositorioDecisao;
+        _repositorioIncidente = repositorioIncidente;
         _repositorioEspacoTrabalho = repositorioEspacoTrabalho;
     }
 
@@ -66,6 +71,8 @@ public sealed class WebReviewHandler
 
         var espacoPadraoId = Guid.Parse("11111111-1111-1111-1111-111111111111");
         var propostas = await _repositorioDecisao.ObterPropostasPendentesAsync(espacoPadraoId);
+        var decisoesVigentes = await _repositorioDecisao.ObterDecisoesVigentesAsync(espacoPadraoId);
+        var incidentes = await _repositorioIncidente.ObterIncidentesAsync(espacoPadraoId);
 
         contexto.Response.ContentType = "text/html; charset=utf-8";
         var html = $@"<!DOCTYPE html>
@@ -73,59 +80,63 @@ public sealed class WebReviewHandler
 <head>
     <meta charset=""UTF-8"">
     <meta name=""viewport"" content=""width=device-width, initial-scale=1.0"">
-    <title>Sentinel — Revisão de Decisões</title>
+    <title>Sentinel — Governança e Decisões de Arquitetura</title>
     <link rel=""icon"" href=""/sentinel-verde.svg"" type=""image/svg+xml"">
     <style>
         :root {{
-            --ios-bg: #000000;
-            --ios-surface: rgba(28, 28, 30, 0.72);
-            --ios-surface-elevated: rgba(44, 44, 46, 0.65);
-            --ios-surface-card: rgba(22, 28, 22, 0.68);
-            --ios-glass-border: rgba(255, 255, 255, 0.08);
-            --ios-glass-border-hover: rgba(52, 199, 89, 0.28);
-            --ios-green: #30D158;
-            --ios-green-tint: rgba(48, 209, 88, 0.12);
-            --ios-green-border: rgba(48, 209, 88, 0.22);
-            --ios-red: #FF453A;
-            --ios-red-tint: rgba(255, 69, 58, 0.12);
-            --ios-red-border: rgba(255, 69, 58, 0.22);
-            --ios-label-primary: #FFFFFF;
-            --ios-label-secondary: rgba(235, 235, 245, 0.6);
-            --ios-label-tertiary: rgba(235, 235, 245, 0.38);
-            --ios-separator: rgba(255, 255, 255, 0.06);
-            --ios-font: -apple-system, BlinkMacSystemFont, ""SF Pro Display"", ""SF Pro Text"", ""Helvetica Neue"", sans-serif;
-            --ios-radius-card: 22px;
-            --ios-radius-btn: 9999px;
-            --ios-radius-inner: 14px;
+            --base-bg: #09090b;
+            --surface-card: #121215;
+            --surface-elevated: #18181c;
+            --surface-inset: #0e0e11;
+            --border-subtle: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(255, 255, 255, 0.16);
+            --brand-emerald: #22c55e;
+            --brand-emerald-dim: #16a34a;
+            --brand-emerald-tint: rgba(34, 197, 94, 0.12);
+            --brand-emerald-border: rgba(34, 197, 94, 0.25);
+            --status-danger: #ef4444;
+            --status-danger-tint: rgba(239, 68, 68, 0.12);
+            --status-danger-border: rgba(239, 68, 68, 0.25);
+            --status-warning: #f59e0b;
+            --status-warning-tint: rgba(245, 158, 11, 0.12);
+            --status-warning-border: rgba(245, 158, 11, 0.25);
+            --text-primary: rgba(255, 255, 255, 0.92);
+            --text-secondary: rgba(255, 255, 255, 0.60);
+            --text-tertiary: rgba(255, 255, 255, 0.40);
+            --font-stack: -apple-system, BlinkMacSystemFont, ""Geist"", ""Inter"", ""SF Pro Text"", system-ui, sans-serif;
+            --radius-card: 16px;
+            --radius-pill: 9999px;
+            --radius-inset: 12px;
         }}
         * {{ box-sizing: border-box; -webkit-tap-highlight-color: transparent; }}
         body {{
-            font-family: var(--ios-font);
-            background-color: var(--ios-bg);
+            font-family: var(--font-stack);
+            background-color: var(--base-bg);
             background-image: 
-                radial-gradient(900px circle at 50% -10%, rgba(48, 209, 88, 0.09), transparent 50%),
-                radial-gradient(700px circle at 90% 100%, rgba(52, 199, 89, 0.05), transparent 45%);
+                radial-gradient(1000px circle at 50% 0%, rgba(34, 197, 94, 0.06), transparent 55%),
+                radial-gradient(800px circle at 90% 100%, rgba(34, 197, 94, 0.03), transparent 50%);
             background-attachment: fixed;
-            color: var(--ios-label-primary);
+            color: var(--text-primary);
             margin: 0;
             padding: 0;
             min-height: 100vh;
             overflow-x: hidden;
-            letter-spacing: -0.015em;
+            letter-spacing: -0.012em;
         }}
 
         #loading-screen {{
             position: fixed;
             top: 0; left: 0; width: 100vw; height: 100vh;
-            background: rgba(0, 0, 0, 0.94);
-            backdrop-filter: blur(40px);
-            -webkit-backdrop-filter: blur(40px);
+            background: rgba(9, 9, 11, 0.96);
+            backdrop-filter: blur(28px);
+            -webkit-backdrop-filter: blur(28px);
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
             z-index: 99999;
-            transition: opacity 0.5s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.5s, transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+            perspective: 1200px;
+            transition: opacity 0.45s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.45s, transform 0.45s cubic-bezier(0.16, 1, 0.3, 1);
         }}
         #loading-screen.oculto {{
             opacity: 0;
@@ -133,631 +144,712 @@ public sealed class WebReviewHandler
             transform: scale(1.02);
             pointer-events: none;
         }}
-        .mascot-stage {{
+        .mascot-3d-stage {{
             position: relative;
-            width: 220px;
-            height: 220px;
+            width: 200px;
+            height: 200px;
             display: flex;
             align-items: center;
             justify-content: center;
+            perspective: 1000px;
+            transform-style: preserve-3d;
         }}
-        .mascot-ambient-glow {{
+        .mascot-shadow-3d {{
             position: absolute;
-            width: 180px;
-            height: 180px;
+            bottom: -8px;
+            width: 140px;
+            height: 24px;
             border-radius: 50%;
-            background: radial-gradient(circle, rgba(48, 209, 88, 0.35) 0%, rgba(48, 209, 88, 0) 70%);
-            filter: blur(24px);
+            background: radial-gradient(ellipse at center, rgba(34, 197, 94, 0.4) 0%, rgba(0, 0, 0, 0.7) 50%, transparent 75%);
+            filter: blur(10px);
             pointer-events: none;
-            z-index: 1;
+            transform: rotateX(75deg);
         }}
-        .mascot-svg {{
+        .mascot-svg-3d {{
             width: 100%;
             height: 100%;
             overflow: visible;
-            position: relative;
-            z-index: 2;
-            filter: drop-shadow(0 14px 28px rgba(0, 0, 0, 0.6));
+            transform-style: preserve-3d;
+            filter: drop-shadow(0 16px 30px rgba(0, 0, 0, 0.65));
         }}
-        .loading-meta {{
-            margin-top: 1.75rem;
+        .loading-details {{
+            margin-top: 1.5rem;
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 0.65rem;
+            gap: 0.4rem;
         }}
         .loading-title {{
-            font-size: 0.95rem;
+            font-size: 0.92rem;
             font-weight: 600;
-            color: var(--ios-label-primary);
-            letter-spacing: -0.01em;
+            color: var(--text-primary);
+            letter-spacing: -0.015em;
         }}
         .loading-subtitle {{
             font-size: 0.78rem;
-            color: var(--ios-label-secondary);
+            color: var(--text-tertiary);
         }}
-        .ios-progress-track {{
-            width: 130px;
-            height: 4px;
-            background: rgba(255, 255, 255, 0.12);
-            border-radius: 9999px;
+        .progress-track-linear {{
+            width: 140px;
+            height: 3px;
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: var(--radius-pill);
             overflow: hidden;
             position: relative;
             margin-top: 0.4rem;
         }}
-        .ios-progress-indicator {{
+        .progress-fill-linear {{
             width: 0%;
             height: 100%;
-            background: linear-gradient(90deg, #30D158, #34C759);
-            border-radius: 9999px;
-            box-shadow: 0 0 8px rgba(48, 209, 88, 0.6);
-            transition: width 1.2s cubic-bezier(0.16, 1, 0.3, 1);
+            background: linear-gradient(90deg, #16a34a, #22c55e);
+            border-radius: var(--radius-pill);
+            box-shadow: 0 0 10px rgba(34, 197, 94, 0.5);
+            transition: width 1s cubic-bezier(0.16, 1, 0.3, 1);
         }}
 
-        #dynamic-island-toast {{
+        #toast-banner {{
             position: fixed;
-            top: 24px;
+            top: 20px;
             left: 50%;
-            transform: translateX(-50%) translateY(-100px) scale(0.92);
-            background: rgba(24, 24, 26, 0.88);
-            backdrop-filter: blur(28px) saturate(190%);
-            -webkit-backdrop-filter: blur(28px) saturate(190%);
-            border: 1px solid var(--ios-glass-border);
-            border-radius: 9999px;
-            padding: 10px 22px;
+            transform: translateX(-50%) translateY(-80px);
+            background: rgba(18, 18, 21, 0.92);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-pill);
+            padding: 8px 18px;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 8px;
             z-index: 100000;
-            box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
             opacity: 0;
             pointer-events: none;
-            transition: transform 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.35s ease;
+            transition: transform 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.275), opacity 0.25s ease;
         }}
-        #dynamic-island-toast.visivel {{
-            transform: translateX(-50%) translateY(0) scale(1);
+        #toast-banner.ativo {{
+            transform: translateX(-50%) translateY(0);
             opacity: 1;
             pointer-events: auto;
         }}
-        .toast-icon {{
-            width: 18px;
-            height: 18px;
+        .toast-pill-dot {{
+            width: 7px;
+            height: 7px;
             border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 11px;
-            font-weight: 700;
+            background: var(--brand-emerald);
+            box-shadow: 0 0 6px var(--brand-emerald);
         }}
-        .toast-icon.sucesso {{
-            background: var(--ios-green);
-            color: #000;
+        .toast-pill-dot.erro {{
+            background: var(--status-danger);
+            box-shadow: 0 0 6px var(--status-danger);
         }}
-        .toast-icon.erro {{
-            background: var(--ios-red);
-            color: #fff;
-        }}
-        .toast-text {{
-            font-size: 0.88rem;
+        .toast-label {{
+            font-size: 0.85rem;
             font-weight: 500;
-            color: #fff;
-            white-space: nowrap;
+            color: var(--text-primary);
         }}
 
-        .app-layout {{
-            max-width: 960px;
+        .layout-container {{
+            max-width: 1040px;
             margin: 0 auto;
-            padding: 2rem 1.25rem 4rem;
+            padding: 2rem 1.5rem 5rem;
         }}
 
-        .nav-bar {{
-            position: sticky;
-            top: 16px;
-            z-index: 1000;
-            background: rgba(22, 28, 22, 0.72);
-            backdrop-filter: blur(28px) saturate(190%);
-            -webkit-backdrop-filter: blur(28px) saturate(190%);
-            border: 1px solid var(--ios-glass-border);
-            border-radius: 20px;
-            padding: 0.85rem 1.4rem;
+        .top-navbar {{
             display: flex;
             justify-content: space-between;
             align-items: center;
+            padding: 1rem 0 1.5rem;
+            border-bottom: 1px solid var(--border-subtle);
             margin-bottom: 2rem;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-            transition: border-color 0.3s;
         }}
-        .nav-bar:hover {{
-            border-color: rgba(255, 255, 255, 0.12);
-        }}
-        .brand-group {{
+        .brand-section {{
             display: flex;
             align-items: center;
             gap: 12px;
         }}
-        .brand-avatar {{
-            width: 40px;
-            height: 40px;
-            border-radius: 11px;
-            background: rgba(48, 209, 88, 0.08);
-            border: 1px solid var(--ios-green-border);
+        .brand-avatar-box {{
+            width: 38px;
+            height: 38px;
+            border-radius: 10px;
+            background: rgba(34, 197, 94, 0.08);
+            border: 1px solid var(--brand-emerald-border);
             display: flex;
             align-items: center;
             justify-content: center;
-            padding: 4px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+            padding: 3px;
         }}
-        .brand-avatar img {{
+        .brand-avatar-box img {{
             width: 100%;
             height: 100%;
             object-fit: contain;
         }}
-        .brand-text h1 {{
+        .brand-title-wrap h1 {{
             margin: 0;
             font-size: 1.15rem;
             font-weight: 600;
-            color: var(--ios-label-primary);
-            letter-spacing: -0.02em;
+            letter-spacing: -0.025em;
+            color: var(--text-primary);
         }}
-        .brand-text .subtext {{
+        .brand-title-wrap .caption {{
             font-size: 0.76rem;
-            color: var(--ios-label-secondary);
+            color: var(--text-tertiary);
             margin-top: 1px;
         }}
-        .nav-controls {{
+        .navbar-status {{
             display: flex;
             align-items: center;
             gap: 10px;
         }}
-        .ios-pill {{
+        .session-badge {{
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 5px 12px;
-            border-radius: var(--ios-radius-btn);
+            background: var(--brand-emerald-tint);
+            border: 1px solid var(--brand-emerald-border);
+            color: var(--brand-emerald);
+            padding: 4px 12px;
+            border-radius: var(--radius-pill);
             font-size: 0.76rem;
             font-weight: 500;
         }}
-        .ios-pill-status {{
-            background: var(--ios-green-tint);
-            color: var(--ios-green);
-            border: 1px solid var(--ios-green-border);
-        }}
-        .status-dot {{
+        .session-badge .live-dot {{
             width: 6px;
             height: 6px;
             border-radius: 50%;
-            background: var(--ios-green);
-            box-shadow: 0 0 6px var(--ios-green);
+            background: var(--brand-emerald);
+            box-shadow: 0 0 6px var(--brand-emerald);
         }}
-        .btn-ios-subtle {{
-            background: rgba(255, 255, 255, 0.07);
-            border: 1px solid var(--ios-glass-border);
-            color: var(--ios-label-primary);
-            padding: 6px 14px;
-            border-radius: var(--ios-radius-btn);
-            font-size: 0.8rem;
+
+        .metrics-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+            gap: 1rem;
+            margin-bottom: 2rem;
+        }}
+        .metric-card {{
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-card);
+            padding: 1.25rem 1.4rem;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 2px 8px rgba(0, 0, 0, 0.3);
+            transition: border-color 0.2s, transform 0.2s;
+        }}
+        .metric-card:hover {{
+            border-color: var(--border-hover);
+            transform: translateY(-1px);
+        }}
+        .metric-label {{
+            font-size: 0.76rem;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+            color: var(--text-tertiary);
+            margin-bottom: 0.4rem;
+        }}
+        .metric-value-row {{
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+        }}
+        .metric-number {{
+            font-size: 1.6rem;
+            font-weight: 600;
+            letter-spacing: -0.03em;
+            color: var(--text-primary);
+            font-variant-numeric: tabular-nums;
+        }}
+        .metric-tag {{
+            font-size: 0.72rem;
+            font-weight: 500;
+            padding: 2px 8px;
+            border-radius: var(--radius-pill);
+        }}
+        .metric-tag.emerald {{
+            background: var(--brand-emerald-tint);
+            color: var(--brand-emerald);
+            border: 1px solid var(--brand-emerald-border);
+        }}
+        .metric-tag.amber {{
+            background: var(--status-warning-tint);
+            color: var(--status-warning);
+            border: 1px solid var(--status-warning-border);
+        }}
+        .metric-tag.neutral {{
+            background: rgba(255, 255, 255, 0.06);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-subtle);
+        }}
+
+        .segmented-tabs {{
+            display: flex;
+            align-items: center;
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-pill);
+            padding: 4px;
+            gap: 4px;
+            margin-bottom: 1.75rem;
+            width: fit-content;
+        }}
+        .tab-btn {{
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            padding: 7px 18px;
+            border-radius: var(--radius-pill);
+            font-size: 0.82rem;
             font-weight: 500;
             cursor: pointer;
             display: inline-flex;
             align-items: center;
-            gap: 6px;
-            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            gap: 7px;
+            transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
         }}
-        .btn-ios-subtle:hover {{
-            background: rgba(255, 255, 255, 0.12);
-            border-color: rgba(255, 255, 255, 0.16);
-            transform: scale(1.02);
+        .tab-btn:hover {{
+            color: var(--text-primary);
         }}
-        .btn-ios-subtle:active {{
-            transform: scale(0.97);
+        .tab-btn.active {{
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-primary);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 2px 6px rgba(0, 0, 0, 0.3);
+        }}
+        .tab-count {{
+            background: rgba(255, 255, 255, 0.08);
+            font-size: 0.68rem;
+            font-weight: 600;
+            padding: 1px 6px;
+            border-radius: var(--radius-pill);
+            font-variant-numeric: tabular-nums;
+        }}
+        .tab-btn.active .tab-count {{
+            background: var(--brand-emerald-tint);
+            color: var(--brand-emerald);
         }}
 
-        .proposals-stack {{
-            display: flex;
+        .tab-panel {{
+            display: none;
             flex-direction: column;
-            gap: 1.5rem;
+            gap: 1.25rem;
+        }}
+        .tab-panel.active {{
+            display: flex;
         }}
 
-        .ios-card {{
-            background: var(--ios-surface-card);
-            backdrop-filter: blur(28px) saturate(180%);
-            -webkit-backdrop-filter: blur(28px) saturate(180%);
-            border: 1px solid var(--ios-glass-border);
-            border-radius: var(--ios-radius-card);
-            padding: 1.85rem;
-            box-shadow: 0 10px 36px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.07);
-            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.3s, box-shadow 0.3s;
-            position: relative;
-            overflow: hidden;
+        .data-card {{
+            background: var(--surface-card);
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-card);
+            padding: 1.6rem;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 4px 16px rgba(0, 0, 0, 0.3);
+            transition: border-color 0.2s, box-shadow 0.2s;
         }}
-        .ios-card:hover {{
-            border-color: var(--ios-glass-border-hover);
-            transform: translateY(-2px);
-            box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        .data-card:hover {{
+            border-color: var(--border-hover);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), 0 6px 24px rgba(0, 0, 0, 0.4);
         }}
-        .card-top-bar {{
+        .data-card-header {{
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
             gap: 1rem;
-            margin-bottom: 1rem;
+            margin-bottom: 0.85rem;
         }}
-        .card-pills {{
+        .data-card-tags {{
             display: flex;
             flex-wrap: wrap;
-            gap: 8px;
+            gap: 6px;
             align-items: center;
         }}
-        .topic-pill {{
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid var(--ios-glass-border);
-            border-radius: var(--ios-radius-btn);
-            padding: 3px 10px;
-            font-size: 0.74rem;
-            font-weight: 500;
-            color: var(--ios-green);
-            font-family: ui-monospace, SFMono-Regular, monospace;
-        }}
-        .version-pill {{
+        .tag-pill {{
             background: rgba(255, 255, 255, 0.05);
-            border: 1px solid var(--ios-glass-border);
-            border-radius: var(--ios-radius-btn);
-            padding: 3px 9px;
+            border: 1px solid var(--border-subtle);
+            border-radius: var(--radius-pill);
+            padding: 2px 9px;
             font-size: 0.72rem;
             font-weight: 500;
-            color: var(--ios-label-secondary);
+            color: var(--text-secondary);
         }}
-        .card-title {{
-            margin: 0 0 1rem;
-            font-size: 1.35rem;
+        .tag-pill.code {{
+            font-family: ui-monospace, SFMono-Regular, monospace;
+            color: var(--brand-emerald);
+        }}
+        .data-card-title {{
+            margin: 0 0 0.85rem;
+            font-size: 1.2rem;
             font-weight: 600;
-            color: var(--ios-label-primary);
             letter-spacing: -0.02em;
+            color: var(--text-primary);
             line-height: 1.35;
         }}
 
-        .ios-inset-box {{
-            background: rgba(14, 18, 14, 0.65);
+        .inset-group {{
+            background: var(--surface-inset);
             border: 1px solid rgba(255, 255, 255, 0.04);
-            border-radius: var(--ios-radius-inner);
-            padding: 1.25rem;
+            border-radius: var(--radius-inset);
+            padding: 1.15rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
             margin-bottom: 1.25rem;
-            display: flex;
-            flex-direction: column;
-            gap: 0.85rem;
         }}
-        .inset-row {{
-            font-size: 0.9rem;
+        .inset-text {{
+            font-size: 0.88rem;
             line-height: 1.5;
-            color: var(--ios-label-secondary);
+            color: var(--text-secondary);
         }}
-        .inset-row strong {{
-            color: var(--ios-label-primary);
+        .inset-text strong {{
+            color: var(--text-primary);
             font-weight: 600;
-            margin-right: 4px;
         }}
 
-        .section-heading {{
-            font-size: 0.8rem;
-            text-transform: uppercase;
-            font-weight: 600;
-            letter-spacing: 0.04em;
-            color: var(--ios-label-tertiary);
-            margin: 1.25rem 0 0.6rem;
-        }}
-
-        .evidence-grid {{
+        .evidence-stack {{
             display: flex;
             flex-direction: column;
-            gap: 6px;
-            margin-bottom: 1.5rem;
+            gap: 5px;
+            margin-bottom: 1.4rem;
         }}
-        .evidence-row {{
+        .evidence-item {{
             background: rgba(255, 255, 255, 0.03);
             border: 1px solid rgba(255, 255, 255, 0.05);
-            border-radius: 12px;
-            padding: 9px 14px;
+            border-radius: 9px;
+            padding: 8px 12px;
             display: flex;
             justify-content: space-between;
             align-items: center;
             text-decoration: none;
-            color: var(--ios-label-secondary);
-            font-size: 0.85rem;
-            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            color: var(--text-secondary);
+            font-size: 0.82rem;
+            transition: all 0.16s ease-out;
         }}
-        .evidence-row:hover {{
-            background: rgba(48, 209, 88, 0.08);
-            border-color: var(--ios-green-border);
-            color: #fff;
-            transform: translateX(3px);
+        .evidence-item:hover {{
+            background: rgba(34, 197, 94, 0.08);
+            border-color: var(--brand-emerald-border);
+            color: var(--text-primary);
+            transform: translateX(2px);
         }}
-        .evidence-meta {{
+        .evidence-left {{
             display: flex;
             align-items: center;
             gap: 8px;
         }}
-        .evidence-tag {{
-            font-size: 0.68rem;
+        .evidence-badge {{
+            font-size: 0.66rem;
             text-transform: uppercase;
             font-weight: 600;
             background: rgba(255, 255, 255, 0.06);
-            color: var(--ios-green);
-            padding: 2px 7px;
-            border-radius: 5px;
+            color: var(--brand-emerald);
+            padding: 2px 6px;
+            border-radius: 4px;
         }}
-        .evidence-chevron {{
-            font-size: 1rem;
-            color: var(--ios-label-tertiary);
+        .evidence-arrow {{
+            color: var(--text-tertiary);
+            font-size: 0.95rem;
         }}
 
-        .card-actions {{
+        .actions-toolbar {{
             display: flex;
             align-items: center;
-            gap: 10px;
-            margin-top: 1.5rem;
-            padding-top: 1.25rem;
-            border-top: 1px solid var(--ios-separator);
+            gap: 8px;
+            padding-top: 1.15rem;
+            border-top: 1px solid var(--border-subtle);
         }}
-        .btn-ios-primary {{
-            background: var(--ios-green);
-            color: #031505;
+        .btn-primary-action {{
+            background: var(--brand-emerald);
+            color: #031405;
             border: none;
-            border-radius: var(--ios-radius-btn);
-            padding: 0.65rem 1.6rem;
-            font-size: 0.88rem;
+            border-radius: var(--radius-pill);
+            padding: 0.55rem 1.4rem;
+            font-size: 0.85rem;
             font-weight: 600;
             cursor: pointer;
             letter-spacing: -0.01em;
-            box-shadow: 0 2px 10px rgba(48, 209, 88, 0.3);
-            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            transition: all 0.16s ease-out;
         }}
-        .btn-ios-primary:hover {{
-            background: #34C759;
-            box-shadow: 0 4px 16px rgba(48, 209, 88, 0.45);
-            transform: scale(1.02);
+        .btn-primary-action:hover {{
+            background: #27d967;
+            box-shadow: 0 4px 12px rgba(34, 197, 94, 0.35);
+            transform: scale(1.015);
         }}
-        .btn-ios-primary:active {{
-            transform: scale(0.97);
+        .btn-primary-action:active {{
+            transform: scale(0.98);
         }}
-        .btn-ios-destructive {{
-            background: var(--ios-red-tint);
-            color: var(--ios-red);
-            border: 1px solid var(--ios-red-border);
-            border-radius: var(--ios-radius-btn);
-            padding: 0.65rem 1.4rem;
-            font-size: 0.88rem;
-            font-weight: 600;
+        .btn-danger-action {{
+            background: var(--status-danger-tint);
+            color: #f87171;
+            border: 1px solid var(--status-danger-border);
+            border-radius: var(--radius-pill);
+            padding: 0.55rem 1.25rem;
+            font-size: 0.85rem;
+            font-weight: 500;
             cursor: pointer;
-            letter-spacing: -0.01em;
-            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            transition: all 0.16s ease-out;
         }}
-        .btn-ios-destructive:hover {{
-            background: rgba(255, 69, 58, 0.2);
-            border-color: rgba(255, 69, 58, 0.35);
-            transform: scale(1.02);
+        .btn-danger-action:hover {{
+            background: rgba(239, 68, 68, 0.2);
+            border-color: rgba(239, 68, 68, 0.4);
+            transform: scale(1.015);
         }}
-        .btn-ios-destructive:active {{
-            transform: scale(0.97);
+        .btn-danger-action:active {{
+            transform: scale(0.98);
         }}
 
-        .empty-dashboard {{
+        .empty-box {{
             text-align: center;
-            padding: 4.5rem 2rem;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
+            padding: 3.5rem 1.5rem;
+            border: 1px dashed var(--border-subtle);
+            border-radius: var(--radius-card);
+            color: var(--text-tertiary);
         }}
-        .empty-icon-wrap {{
-            width: 72px;
-            height: 72px;
-            border-radius: 20px;
-            background: rgba(48, 209, 88, 0.08);
-            border: 1px solid var(--ios-green-border);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin-bottom: 1.25rem;
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        .empty-box h3 {{
+            color: var(--text-secondary);
+            font-size: 1.05rem;
+            font-weight: 500;
+            margin: 0 0 0.4rem;
         }}
-        .empty-icon-wrap img {{
-            width: 44px;
-            height: 44px;
-        }}
-        .empty-title {{
-            font-size: 1.2rem;
-            font-weight: 600;
-            color: var(--ios-label-primary);
-            margin: 0 0 0.5rem;
-        }}
-        .empty-desc {{
-            font-size: 0.88rem;
-            color: var(--ios-label-secondary);
-            max-width: 420px;
+        .empty-box p {{
+            font-size: 0.85rem;
+            margin: 0;
+            max-width: 400px;
             margin: 0 auto;
-            line-height: 1.45;
         }}
 
-        .ios-modal-backdrop {{
+        .modal-overlay {{
             position: fixed;
             top: 0; left: 0; width: 100vw; height: 100vh;
             background: rgba(0, 0, 0, 0.7);
-            backdrop-filter: blur(24px);
-            -webkit-backdrop-filter: blur(24px);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
             display: flex;
             align-items: center;
             justify-content: center;
             z-index: 10000;
             opacity: 0;
             visibility: hidden;
-            transition: opacity 0.28s ease, visibility 0.28s;
+            transition: opacity 0.24s ease, visibility 0.24s;
         }}
-        .ios-modal-backdrop.ativo {{
+        .modal-overlay.ativo {{
             opacity: 1;
             visibility: visible;
         }}
-        .ios-modal-sheet {{
-            background: rgba(28, 34, 28, 0.92);
-            border: 1px solid var(--ios-glass-border);
-            border-radius: 24px;
+        .modal-dialog {{
+            background: #151518;
+            border: 1px solid var(--border-subtle);
+            border-radius: 20px;
             width: 90%;
             max-width: 440px;
             padding: 1.75rem;
-            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-            transform: scale(0.92) translateY(12px);
-            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+            transform: scale(0.94);
+            transition: transform 0.24s cubic-bezier(0.175, 0.885, 0.32, 1.275);
             display: flex;
             flex-direction: column;
             gap: 1rem;
         }}
-        .ios-modal-backdrop.ativo .ios-modal-sheet {{
-            transform: scale(1) translateY(0);
+        .modal-overlay.ativo .modal-dialog {{
+            transform: scale(1);
         }}
-        .modal-header h3 {{
+        .dialog-header h3 {{
             margin: 0;
             font-size: 1.15rem;
             font-weight: 600;
-            color: #fff;
+            color: var(--text-primary);
         }}
-        .modal-header p {{
+        .dialog-header p {{
             margin: 0.35rem 0 0;
             font-size: 0.85rem;
-            color: var(--ios-label-secondary);
+            color: var(--text-secondary);
             line-height: 1.4;
         }}
-        .ios-input-field {{
+        .dialog-input {{
             width: 100%;
-            background: rgba(255, 255, 255, 0.06);
-            border: 1px solid var(--ios-glass-border);
-            border-radius: 12px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border-subtle);
+            border-radius: 10px;
             color: #fff;
-            padding: 12px 14px;
+            padding: 10px 12px;
             font-family: inherit;
-            font-size: 0.9rem;
+            font-size: 0.88rem;
             resize: none;
-            min-height: 85px;
+            min-height: 80px;
             outline: none;
             box-sizing: border-box;
             transition: border-color 0.2s;
         }}
-        .ios-input-field:focus {{
-            border-color: var(--ios-green);
+        .dialog-input:focus {{
+            border-color: var(--brand-emerald);
         }}
-        .modal-actions {{
+        .dialog-actions {{
             display: flex;
             justify-content: flex-end;
-            gap: 10px;
-            margin-top: 0.5rem;
+            gap: 8px;
+            margin-top: 0.4rem;
+        }}
+        .btn-dialog-cancel {{
+            background: rgba(255, 255, 255, 0.06);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+            padding: 6px 14px;
+            border-radius: var(--radius-pill);
+            font-size: 0.82rem;
+            font-weight: 500;
+            cursor: pointer;
         }}
     </style>
 </head>
 <body>
     <div id=""loading-screen"">
-        <div class=""mascot-stage"">
-            <div class=""mascot-ambient-glow""></div>
-            <svg id=""sentinel-mascot"" class=""mascot-svg"" viewBox=""0 0 1024 1024"" role=""img"" aria-label=""Mascote Sentinel"">
+        <div class=""mascot-3d-stage"">
+            <div class=""mascot-shadow-3d"" id=""mascot-shadow""></div>
+            <svg id=""sentinel-mascot"" class=""mascot-svg-3d"" viewBox=""0 0 1024 1024"" role=""img"" aria-label=""Mascote Sentinel 3D"">
                 <defs>
-                    <radialGradient id=""sm-face"" cx=""50%"" cy=""57%"" r=""66%"">
-                        <stop offset=""0.65"" stop-color=""#0B1008"" />
-                        <stop offset=""0.87"" stop-color=""#17240F"" />
-                        <stop offset=""1"" stop-color=""#355414"" />
+                    <radialGradient id=""sm-3d-face"" cx=""38%"" cy=""36%"" r=""65%"">
+                        <stop offset=""0%"" stop-color=""#416518"" />
+                        <stop offset=""35%"" stop-color=""#223a0d"" />
+                        <stop offset=""72%"" stop-color=""#0f1908"" />
+                        <stop offset=""92%"" stop-color=""#070d04"" />
+                        <stop offset=""100%"" stop-color=""#233f0e"" />
                     </radialGradient>
-                    <linearGradient id=""sm-petal"" x1=""0.28"" y1=""0"" x2=""0.85"" y2=""1"" gradientUnits=""objectBoundingBox"">
-                        <stop stop-color=""#D9FF8A"" />
-                        <stop offset="".36"" stop-color=""#B8F34B"" />
-                        <stop offset="".72"" stop-color=""#A3E635"" />
-                        <stop offset=""1"" stop-color=""#559912"" />
+                    <linearGradient id=""sm-3d-petal"" x1=""0.2"" y1=""0"" x2=""0.8"" y2=""1"">
+                        <stop offset=""0%"" stop-color=""#f0ffc7"" />
+                        <stop offset=""22%"" stop-color=""#b8f34b"" />
+                        <stop offset=""65%"" stop-color=""#7ec722"" />
+                        <stop offset=""100%"" stop-color=""#3b690d"" />
                     </linearGradient>
-                    <linearGradient id=""sm-eye"" x2=""0.2"" y2=""1"">
-                        <stop stop-color=""#fff"" />
-                        <stop offset=""1"" stop-color=""#E8F5D8"" />
-                    </linearGradient>
-                    <linearGradient id=""sm-mouth"" x1=""0.2"" y1=""0"" x2=""0.5"" y2=""1"">
-                        <stop stop-color=""#0C1308"" />
-                        <stop offset=""1"" stop-color=""#243B12"" />
-                    </linearGradient>
-                    <radialGradient id=""sm-tongue"" cx=""50%"" cy=""100%"" r=""100%"">
-                        <stop stop-color=""#E4FFB5"" />
-                        <stop offset=""1"" stop-color=""#84C529"" />
+                    <radialGradient id=""sm-3d-eye"" cx=""42%"" cy=""35%"" r=""55%"">
+                        <stop offset=""0%"" stop-color=""#ffffff"" />
+                        <stop offset=""75%"" stop-color=""#e6f5d8"" />
+                        <stop offset=""100%"" stop-color=""#a6caa0"" />
                     </radialGradient>
-                    <clipPath id=""sm-top"">
+                    <linearGradient id=""sm-3d-mouth"" x1=""0.2"" y1=""0"" x2=""0.5"" y2=""1"">
+                        <stop offset=""0%"" stop-color=""#080e05"" />
+                        <stop offset=""100%"" stop-color=""#1a2d0c"" />
+                    </linearGradient>
+                    <radialGradient id=""sm-3d-tongue"" cx=""50%"" cy=""95%"" r=""90%"">
+                        <stop offset=""0%"" stop-color=""#ecffcf"" />
+                        <stop offset=""60%"" stop-color=""#90db2c"" />
+                        <stop offset=""100%"" stop-color=""#528813"" />
+                    </radialGradient>
+                    <clipPath id=""sm-top-3d"">
                         <path d=""M512 0H1024V1024H512Z"" />
                     </clipPath>
-                    <clipPath id=""sm-smile"">
+                    <clipPath id=""sm-smile-3d"">
                         <path id=""mouth-clip"" d=""M399 566 Q512 585 632 549 Q644 546 642 560 C631 625 581 671 520 671 C462 671 417 634 398 577 Q394 566 399 566Z"" />
                     </clipPath>
+                    <filter id=""petal-depth"" x=""-10%"" y=""-10%"" width=""120%"" height=""120%"">
+                        <feDropShadow dx=""0"" dy=""6"" stdDeviation=""8"" flood-color=""#000000"" flood-opacity=""0.45"" />
+                    </filter>
                 </defs>
-                <g id=""sm-character"">
-                    <path id=""sm-face"" d=""M512 161A351 351 0 1 1 512 863A351 351 0 1 1 512 161Z"" fill=""url(#sm-face)"" />
-                    <g id=""sm-petals-group"" fill=""url(#sm-petal)"">
-                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(0 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
-                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(300 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
-                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(240 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
-                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(180 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
-                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(120 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
-                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(60 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
-                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" clip-path=""url(#sm-top)"" stroke=""#E3FFAD"" stroke-width=""1.5"" stroke-opacity="".4"" />
+                <g id=""sm-character-3d"">
+                    <path id=""sm-face"" d=""M512 161A351 351 0 1 1 512 863A351 351 0 1 1 512 161Z"" fill=""url(#sm-3d-face)"" />
+                    <g id=""sm-petals"" fill=""url(#sm-3d-petal)"" filter=""url(#petal-depth)"">
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(0 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.2"" stroke-opacity="".5"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(300 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.2"" stroke-opacity="".5"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(240 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.2"" stroke-opacity="".5"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(180 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.2"" stroke-opacity="".5"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(120 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.2"" stroke-opacity="".5"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" transform=""rotate(60 512 512)"" stroke=""#E3FFAD"" stroke-width=""1.2"" stroke-opacity="".5"" />
+                        <path class=""sm-petal"" d=""M310 252 C360 133 491 90 612 135 C729 178 786 290 746 408 C743 417 737 416 734 407 C696 294 625 201 533 190 C464 182 416 205 380 246 C365 261 335 259 310 252Z"" clip-path=""url(#sm-top-3d)"" stroke=""#E3FFAD"" stroke-width=""1.2"" stroke-opacity="".5"" />
                     </g>
-                    <g id=""sm-eyes-group"" fill=""url(#sm-eye)"">
+                    <g id=""sm-eyes"" fill=""url(#sm-3d-eye)"">
                         <path id=""sm-eye-l"" d=""M334 496 C339 457 390 411 429 410 C460 409 473 434 473 468 L473 485 C473 512 460 526 435 528 L371 533 C346 535 331 521 334 496Z"" />
                         <path id=""sm-eye-r"" d=""M551 468 C551 434 564 409 595 410 C634 411 685 457 690 496 C693 521 678 535 653 533 L589 528 C564 526 551 512 551 485Z"" />
                     </g>
-                    <path id=""sm-mouth"" d=""M399 566 Q512 585 632 549 Q644 546 642 560 C631 625 581 671 520 671 C462 671 417 634 398 577 Q394 566 399 566Z"" fill=""url(#sm-mouth)"" stroke=""#7EBB28"" stroke-width=""2"" />
-                    <g clip-path=""url(#sm-smile)"">
-                        <path id=""sm-tongue"" d=""M449 668A91 54 0 1 1 631 668A91 54 0 1 1 449 668Z"" fill=""url(#sm-tongue)"" />
-                        <path id=""sm-teeth"" d=""M390 557 Q507 580 648 542 L649 557 Q529 608 407 584Z"" fill=""url(#sm-eye)"" />
+                    <path id=""sm-mouth"" d=""M399 566 Q512 585 632 549 Q644 546 642 560 C631 625 581 671 520 671 C462 671 417 634 398 577 Q394 566 399 566Z"" fill=""url(#sm-3d-mouth)"" stroke=""#67a31b"" stroke-width=""1.5"" />
+                    <g clip-path=""url(#sm-smile-3d)"">
+                        <path id=""sm-tongue"" d=""M449 668A91 54 0 1 1 631 668A91 54 0 1 1 449 668Z"" fill=""url(#sm-3d-tongue)"" />
+                        <path id=""sm-teeth"" d=""M390 557 Q507 580 648 542 L649 557 Q529 608 407 584Z"" fill=""url(#sm-3d-eye)"" />
                     </g>
                 </g>
             </svg>
         </div>
-        <div class=""loading-meta"">
+        <div class=""loading-details"">
             <div class=""loading-title"">Sentinel</div>
-            <div class=""loading-subtitle"">Conectando ao núcleo de governança...</div>
-            <div class=""ios-progress-track"">
-                <div id=""loading-progress"" class=""ios-progress-indicator""></div>
+            <div class=""loading-subtitle"">Conectando aos registros de governança...</div>
+            <div class=""progress-track-linear"">
+                <div id=""loading-progress"" class=""progress-fill-linear""></div>
             </div>
         </div>
     </div>
 
-    <div id=""dynamic-island-toast"">
-        <div id=""toast-icon"" class=""toast-icon sucesso"">✓</div>
-        <div id=""toast-text"" class=""toast-text"">Operação realizada</div>
+    <div id=""toast-banner"">
+        <div id=""toast-dot"" class=""toast-pill-dot""></div>
+        <div id=""toast-text"" class=""toast-label"">Operação realizada</div>
     </div>
 
-    <div class=""app-layout"">
-        <header class=""nav-bar"">
-            <div class=""brand-group"">
-                <div class=""brand-avatar"">
+    <div class=""layout-container"">
+        <header class=""top-navbar"">
+            <div class=""brand-section"">
+                <div class=""brand-avatar-box"">
                     <img src=""/sentinel-verde.svg"" alt=""Sentinel"">
                 </div>
-                <div class=""brand-text"">
+                <div class=""brand-title-wrap"">
                     <h1>Sentinel</h1>
-                    <div class=""subtext"">Portal de Revisão Humana</div>
+                    <div class=""caption"">Governança Arquitetural & Auditoria Imutável</div>
                 </div>
             </div>
-            <div class=""nav-controls"">
-                <button class=""btn-ios-subtle"" onclick=""reexecutarAnimacaoCarregamento()"">
-                    <span>Replay Mascote</span>
-                </button>
-                <div class=""ios-pill ios-pill-status"">
-                    <span class=""status-dot""></span>
-                    <span>Maintainer</span>
+            <div class=""navbar-status"">
+                <div class=""session-badge"">
+                    <span class=""live-dot""></span>
+                    <span>Sessão: Maintainer</span>
                 </div>
             </div>
         </header>
 
-        <main id=""proposals-container"" class=""proposals-stack"">";
+        <section class=""metrics-grid"">
+            <div class=""metric-card"">
+                <div class=""metric-label"">Decisões Vigentes</div>
+                <div class=""metric-value-row"">
+                    <span class=""metric-number"">{decisoesVigentes.Count}</span>
+                    <span class=""metric-tag emerald"">Ativas</span>
+                </div>
+            </div>
+            <div class=""metric-card"">
+                <div class=""metric-label"">Propostas Pendentes</div>
+                <div class=""metric-value-row"">
+                    <span class=""metric-number"">{propostas.Count}</span>
+                    <span class=""metric-tag {(propostas.Count > 0 ? "amber" : "neutral")}"">{(propostas.Count > 0 ? "Revisão Necessária" : "Em dia")}</span>
+                </div>
+            </div>
+            <div class=""metric-card"">
+                <div class=""metric-label"">Incidentes Registrados</div>
+                <div class=""metric-value-row"">
+                    <span class=""metric-number"">{incidentes.Count}</span>
+                    <span class=""metric-tag neutral"">Histórico</span>
+                </div>
+            </div>
+            <div class=""metric-card"">
+                <div class=""metric-label"">Espaço de Trabalho</div>
+                <div class=""metric-value-row"">
+                    <span style=""font-size: 0.95rem; font-weight: 600; color: var(--text-primary);"">Pagamentos</span>
+                    <span class=""metric-tag emerald"">RLS Ativo</span>
+                </div>
+            </div>
+        </section>
+
+        <nav class=""segmented-tabs"">
+            <button class=""tab-btn active"" onclick=""trocarAba('tab-propostas', this)"">
+                <span>Propostas Pendentes</span>
+                <span class=""tab-count"">{propostas.Count}</span>
+            </button>
+            <button class=""tab-btn"" onclick=""trocarAba('tab-vigentes', this)"">
+                <span>Decisões Vigentes</span>
+                <span class=""tab-count"">{decisoesVigentes.Count}</span>
+            </button>
+            <button class=""tab-btn"" onclick=""trocarAba('tab-incidentes', this)"">
+                <span>Incidentes Reportados</span>
+                <span class=""tab-count"">{incidentes.Count}</span>
+            </button>
+        </nav>
+
+        <section id=""tab-propostas"" class=""tab-panel active"">";
 
         if (propostas.Count == 0)
         {
             html += @"
-            <div class=""ios-card empty-dashboard"">
-                <div class=""empty-icon-wrap"">
-                    <img src=""/sentinel-verde.svg"" alt=""Sentinel"">
-                </div>
-                <h2 class=""empty-title"">Tudo em dia com a governança</h2>
-                <p class=""empty-desc"">Nenhuma proposta arquitetural pendente de validação humana no momento. Novas propostas submetidas por agentes via <code>propose_decision</code> serão exibidas aqui.</p>
+            <div class=""empty-box"">
+                <h3>Nenhuma proposta aguardando revisão</h3>
+                <p>Todas as decisões arquiteturais estão em dia. Novas propostas geradas por agentes via MCP aparecerão aqui para validação humana.</p>
             </div>";
         }
         else
@@ -765,62 +857,150 @@ public sealed class WebReviewHandler
             foreach (var p in propostas)
             {
                 var evidenciasHtml = string.Join("", p.Evidencias.Select(e => $@"
-                    <a href=""{e.Url}"" target=""_blank"" rel=""noopener noreferrer"" class=""evidence-row"">
-                        <div class=""evidence-meta"">
-                            <span class=""evidence-tag"">{e.Tipo}</span>
+                    <a href=""{e.Url}"" target=""_blank"" rel=""noopener noreferrer"" class=""evidence-item"">
+                        <div class=""evidence-left"">
+                            <span class=""evidence-badge"">{e.Tipo}</span>
                             <span>{e.Rotulo}</span>
                         </div>
-                        <span class=""evidence-chevron"">›</span>
+                        <span class=""evidence-arrow"">›</span>
                     </a>"));
 
                 html += $@"
-                <article class=""ios-card"" id=""card-{p.TopicoId}"">
-                    <div class=""card-top-bar"">
-                        <div class=""card-pills"">
-                            <span class=""topic-pill"">tópico: {p.ChaveTopico}</span>
-                            <span class=""version-pill"">v{p.VersaoFluxo}</span>
+                <article class=""data-card"" id=""proposta-{p.TopicoId}"">
+                    <div class=""data-card-header"">
+                        <div class=""data-card-tags"">
+                            <span class=""tag-pill code"">tópico: {p.ChaveTopico}</span>
+                            <span class=""tag-pill"">fluxo v{p.VersaoFluxo}</span>
+                            <span class=""tag-pill"" style=""color: var(--status-warning);"">Aguardando Aprovação</span>
                         </div>
                     </div>
-                    <h2 class=""card-title"">{p.Titulo}</h2>
-                    
-                    <div class=""ios-inset-box"">
-                        <div class=""inset-row"">
-                            <strong>Resumo:</strong> {p.Resumo}
-                        </div>
-                        <div class=""inset-row"">
-                            <strong>Justificativa Técnica:</strong> {p.Justificativa ?? "Decisão proposta para governança técnica contínua."}
-                        </div>
+                    <h2 class=""data-card-title"">{p.Titulo}</h2>
+                    <div class=""inset-group"">
+                        <div class=""inset-text""><strong>Resumo:</strong> {p.Resumo}</div>
+                        <div class=""inset-text""><strong>Justificativa Técnica:</strong> {p.Justificativa ?? "Decisão proposta para governança técnica contínua."}</div>
                     </div>
-
-                    <div class=""section-heading"">Evidências e Referências</div>
-                    <div class=""evidence-grid"">
-                        {evidenciasHtml}
-                    </div>
-
-                    <div class=""card-actions"">
-                        <button class=""btn-ios-primary"" onclick=""abrirModalAprovacao('{p.EspacoTrabalhoId}', '{p.ProjetoId}', '{p.TopicoId}', '{p.PropostaPendenteId ?? p.RegistroAtivoId}', {p.VersaoFluxo})"">Aprovar Decisão</button>
-                        <button class=""btn-ios-destructive"" onclick=""abrirModalRejeicao('{p.EspacoTrabalhoId}', '{p.ProjetoId}', '{p.TopicoId}', '{p.PropostaPendenteId ?? p.RegistroAtivoId}', {p.VersaoFluxo})"">Rejeitar</button>
+                    <div style=""font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); margin-bottom: 0.5rem; font-weight: 600;"">Evidências Anexadas</div>
+                    <div class=""evidence-stack"">{evidenciasHtml}</div>
+                    <div class=""actions-toolbar"">
+                        <button class=""btn-primary-action"" onclick=""abrirModalAprovacao('{p.EspacoTrabalhoId}', '{p.ProjetoId}', '{p.TopicoId}', '{p.PropostaPendenteId ?? p.RegistroAtivoId}', {p.VersaoFluxo})"">Aprovar Decisão</button>
+                        <button class=""btn-danger-action"" onclick=""abrirModalRejeicao('{p.EspacoTrabalhoId}', '{p.ProjetoId}', '{p.TopicoId}', '{p.PropostaPendenteId ?? p.RegistroAtivoId}', {p.VersaoFluxo})"">Rejeitar</button>
                     </div>
                 </article>";
             }
         }
 
         html += $@"
-        </main>
+        </section>
+
+        <section id=""tab-vigentes"" class=""tab-panel"">";
+
+        if (decisoesVigentes.Count == 0)
+        {
+            html += @"
+            <div class=""empty-box"">
+                <h3>Nenhuma decisão vigente ativa</h3>
+                <p>Ainda não há decisões arquiteturais promovidas a vigentes neste espaço de trabalho.</p>
+            </div>";
+        }
+        else
+        {
+            foreach (var d in decisoesVigentes)
+            {
+                var evidenciasHtml = string.Join("", d.Evidencias.Select(e => $@"
+                    <a href=""{e.Url}"" target=""_blank"" rel=""noopener noreferrer"" class=""evidence-item"">
+                        <div class=""evidence-left"">
+                            <span class=""evidence-badge"">{e.Tipo}</span>
+                            <span>{e.Rotulo}</span>
+                        </div>
+                        <span class=""evidence-arrow"">›</span>
+                    </a>"));
+
+                html += $@"
+                <article class=""data-card"">
+                    <div class=""data-card-header"">
+                        <div class=""data-card-tags"">
+                            <span class=""tag-pill code"">tópico: {d.ChaveTopico}</span>
+                            <span class=""tag-pill"">fluxo v{d.VersaoFluxo}</span>
+                            <span class=""tag-pill"" style=""color: var(--brand-emerald);"">● Vigente / Ativa</span>
+                        </div>
+                        <span style=""font-size: 0.74rem; color: var(--text-tertiary);"">Atualizado: {d.AtualizadoEm:dd/MM/yyyy HH:mm}</span>
+                    </div>
+                    <h2 class=""data-card-title"">{d.Titulo}</h2>
+                    <div class=""inset-group"">
+                        <div class=""inset-text""><strong>Resumo:</strong> {d.Resumo}</div>
+                        <div class=""inset-text""><strong>Justificativa Arquitetural:</strong> {d.Justificativa ?? "Governança arquitetural consolidada."}</div>
+                    </div>
+                    <div style=""font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); margin-bottom: 0.5rem; font-weight: 600;"">Evidências e Histórico</div>
+                    <div class=""evidence-stack"">{evidenciasHtml}</div>
+                </article>";
+            }
+        }
+
+        html += $@"
+        </section>
+
+        <section id=""tab-incidentes"" class=""tab-panel"">";
+
+        if (incidentes.Count == 0)
+        {
+            html += @"
+            <div class=""empty-box"">
+                <h3>Nenhum incidente reportado</h3>
+                <p>Nenhum relato de incidente foi submetido via ferramenta <code>log_incident</code>.</p>
+            </div>";
+        }
+        else
+        {
+            foreach (var inc in incidentes)
+            {
+                var evidenciasHtml = string.Join("", inc.Evidencias.Select(e => $@"
+                    <a href=""{e.Url}"" target=""_blank"" rel=""noopener noreferrer"" class=""evidence-item"">
+                        <div class=""evidence-left"">
+                            <span class=""evidence-badge"">{e.Tipo}</span>
+                            <span>{e.Rotulo}</span>
+                        </div>
+                        <span class=""evidence-arrow"">›</span>
+                    </a>"));
+
+                var tagsHtml = string.Join(" ", inc.ChavesTecnicas.Select(k => $@"<span class=""tag-pill code"">{k}</span>"));
+
+                html += $@"
+                <article class=""data-card"">
+                    <div class=""data-card-header"">
+                        <div class=""data-card-tags"">
+                            <span class=""tag-pill"">incidente: {inc.IncidenteId.ToString()[..8]}...</span>
+                            <span class=""tag-pill"">versão v{inc.VersaoFluxo}</span>
+                            <span class=""tag-pill"" style=""color: var(--text-secondary);"">Reportado</span>
+                        </div>
+                        <span style=""font-size: 0.74rem; color: var(--text-tertiary);"">Ocorrido: {inc.OcorridoEm:dd/MM/yyyy HH:mm}</span>
+                    </div>
+                    <h2 class=""data-card-title"">{inc.Titulo}</h2>
+                    <div class=""inset-group"">
+                        <div class=""inset-text""><strong>Relato:</strong> {inc.Resumo}</div>
+                        <div class=""inset-text""><strong>Chaves Técnicas:</strong> {tagsHtml}</div>
+                    </div>
+                    <div style=""font-size: 0.76rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-tertiary); margin-bottom: 0.5rem; font-weight: 600;"">Evidências (RCA / Correções)</div>
+                    <div class=""evidence-stack"">{evidenciasHtml}</div>
+                </article>";
+            }
+        }
+
+        html += $@"
+        </section>
     </div>
 
-    <div id=""ios-modal"" class=""ios-modal-backdrop"">
-        <div class=""ios-modal-sheet"">
-            <div class=""modal-header"">
-                <h3 id=""modal-title"">Confirmar Ação</h3>
-                <p id=""modal-desc"">Deseja prosseguir com a operação de governança?</p>
+    <div id=""dialog-overlay"" class=""modal-overlay"">
+        <div class=""modal-dialog"">
+            <div class=""dialog-header"">
+                <h3 id=""dialog-title"">Confirmar Operação</h3>
+                <p id=""dialog-desc"">Deseja prosseguir com a operação de governança?</p>
             </div>
-            <div id=""modal-input-wrap"" style=""display:none;"">
-                <textarea id=""modal-reason-input"" class=""ios-input-field"" placeholder=""Descreva a justificativa para a rejeição da proposta...""></textarea>
+            <div id=""dialog-input-container"" style=""display:none;"">
+                <textarea id=""dialog-reason"" class=""dialog-input"" placeholder=""Descreva a justificativa técnica para a rejeição da proposta...""></textarea>
             </div>
-            <div class=""modal-actions"">
-                <button class=""btn-ios-subtle"" onclick=""fecharModal()"">Cancelar</button>
-                <button id=""modal-confirm-btn"" class=""btn-ios-primary"" onclick=""confirmarAcaoModal()"">Confirmar</button>
+            <div class=""dialog-actions"">
+                <button class=""btn-dialog-cancel"" onclick=""fecharModal()"">Cancelar</button>
+                <button id=""dialog-confirm-btn"" class=""btn-primary-action"" onclick=""confirmarOperacaoModal()"">Confirmar</button>
             </div>
         </div>
     </div>
@@ -828,54 +1008,60 @@ public sealed class WebReviewHandler
     <script src=""https://cdnjs.cloudflare.com/ajax/libs/gsap/3.12.5/gsap.min.js""></script>
     <script>
         const tokenCsrf = '{tokenCsrf}';
-        let modalPayload = null;
+        let dadosModal = null;
 
-        function exibirToast(mensagem, tipo = 'sucesso') {{
-            const toast = document.getElementById('dynamic-island-toast');
-            const icon = document.getElementById('toast-icon');
-            const text = document.getElementById('toast-text');
-            icon.className = 'toast-icon ' + tipo;
-            icon.textContent = tipo === 'sucesso' ? '✓' : '!';
-            text.textContent = mensagem;
-            toast.classList.add('visivel');
-            setTimeout(() => {{
-                toast.classList.remove('visivel');
-            }}, 3200);
+        function trocarAba(idPainel, botao) {{
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(idPainel).classList.add('active');
+            botao.classList.add('active');
         }}
 
-        function executarAnimacaoMascote(onFinish) {{
-            const svg = document.getElementById('sentinel-mascot');
-            const character = document.getElementById('sm-character');
-            const face = document.getElementById('sm-face');
-            const petals = document.querySelectorAll('.sm-petal');
+        function exibirToast(mensagem, tipo = 'sucesso') {{
+            const toast = document.getElementById('toast-banner');
+            const dot = document.getElementById('toast-dot');
+            const label = document.getElementById('toast-text');
+            dot.className = tipo === 'sucesso' ? 'toast-pill-dot' : 'toast-pill-dot erro';
+            label.textContent = mensagem;
+            toast.classList.add('ativo');
+            setTimeout(() => {{
+                toast.classList.remove('ativo');
+            }}, 3000);
+        }}
+
+        function executarAnimacaoMascote3D(aoFinalizar) {{
+            const character = document.getElementById('sm-character-3d');
+            const shadow = document.getElementById('mascot-shadow');
             const eyeR = document.getElementById('sm-eye-r');
             const mouth = document.getElementById('sm-mouth');
             const mouthClip = document.getElementById('mouth-clip');
             const teeth = document.getElementById('sm-teeth');
             const tongue = document.getElementById('sm-tongue');
-            const glow = document.querySelector('.mascot-ambient-glow');
             const progress = document.getElementById('loading-progress');
 
             if (progress) progress.style.width = '100%';
 
             if (typeof gsap === 'undefined') {{
-                setTimeout(onFinish, 1000);
+                setTimeout(aoFinalizar, 900);
                 return;
             }}
 
             gsap.set(character, {{
-                scale: 0.76,
+                scale: 0.78,
                 opacity: 0,
-                y: 35,
+                y: 30,
+                rotationX: 18,
+                rotationY: -22,
+                rotationZ: -4,
                 transformOrigin: '50% 75%'
             }});
-            gsap.set(glow, {{ opacity: 0, scale: 0.6 }});
-            gsap.set(teeth, {{ y: -30 }});
+            gsap.set(shadow, {{ opacity: 0, scale: 0.5 }});
+            gsap.set(teeth, {{ y: -28 }});
             gsap.set(tongue, {{ y: 20 }});
 
             const tl = gsap.timeline({{
                 onComplete: () => {{
-                    if (onFinish) onFinish();
+                    if (aoFinalizar) aoFinalizar();
                 }}
             }});
 
@@ -883,113 +1069,97 @@ public sealed class WebReviewHandler
                 scale: 1,
                 opacity: 1,
                 y: 0,
-                duration: 0.85,
-                ease: 'back.out(1.5)'
+                rotationX: 0,
+                rotationY: 0,
+                rotationZ: 0,
+                duration: 0.75,
+                ease: 'back.out(1.4)'
             }}, 0);
 
-            tl.to(glow, {{
-                opacity: 0.85,
+            tl.to(shadow, {{
+                opacity: 0.8,
                 scale: 1,
-                duration: 0.85,
+                duration: 0.75,
                 ease: 'power2.out'
             }}, 0.05);
 
-            const bocaSorridente = 'M399 566 Q512 585 632 549 Q644 546 642 560 C631 625 581 671 520 671 C462 671 417 634 398 577 Q394 566 399 566Z';
+            const bocaAberta = 'M399 566 Q512 585 632 549 Q644 546 642 560 C631 625 581 671 520 671 C462 671 417 634 398 577 Q394 566 399 566Z';
             tl.to([mouth, mouthClip], {{
-                attr: {{ d: bocaSorridente }},
-                duration: 0.35,
+                attr: {{ d: bocaAberta }},
+                duration: 0.3,
                 ease: 'back.out(1.8)'
-            }}, 0.55);
+            }}, 0.45);
             tl.to([teeth, tongue], {{
                 y: 0,
-                duration: 0.35,
+                duration: 0.3,
                 ease: 'back.out(1.8)'
-            }}, 0.55);
+            }}, 0.45);
 
             tl.to(character, {{
                 y: -10,
-                duration: 0.24,
+                rotationX: -6,
+                rotationY: 8,
+                duration: 0.22,
                 ease: 'power2.out',
                 yoyo: true,
                 repeat: 1
-            }}, 0.6);
+            }}, 0.5);
 
             tl.to(eyeR, {{
                 scaleY: 0.1,
-                duration: 0.12,
+                duration: 0.1,
                 transformOrigin: '50% 50%',
                 ease: 'power2.inOut',
                 yoyo: true,
                 repeat: 1
-            }}, 0.9);
-
-            tl.to(character, {{
-                rotation: -3,
-                duration: 0.22,
-                transformOrigin: '50% 75%',
-                ease: 'power2.out',
-                yoyo: true,
-                repeat: 1
-            }}, 0.9);
-        }}
-
-        function reexecutarAnimacaoCarregamento() {{
-            const screen = document.getElementById('loading-screen');
-            const progress = document.getElementById('loading-progress');
-            if (progress) progress.style.width = '0%';
-            screen.classList.remove('oculto');
-            executarAnimacaoMascote(() => {{
-                setTimeout(() => {{
-                    screen.classList.add('oculto');
-                }}, 300);
-            }});
+            }}, 0.75);
         }}
 
         window.addEventListener('DOMContentLoaded', () => {{
-            executarAnimacaoMascote(() => {{
+            executarAnimacaoMascote3D(() => {{
                 setTimeout(() => {{
                     document.getElementById('loading-screen').classList.add('oculto');
-                }}, 350);
+                }}, 250);
             }});
         }});
 
         function abrirModalAprovacao(wsId, projId, topicoId, propostaId, versaoAtual) {{
-            modalPayload = {{
+            dadosModal = {{
                 tipo: 'aprovar',
                 wsId, projId, topicoId, propostaId, versaoAtual
             }};
-            document.getElementById('modal-title').textContent = 'Aprovar Decisão';
-            document.getElementById('modal-desc').textContent = 'Esta proposta será aprovada e ativada imediatamente na governança, substituindo quaisquer decisões ativas anteriores para o mesmo tópico.';
-            document.getElementById('modal-input-wrap').style.display = 'none';
-            const btn = document.getElementById('modal-confirm-btn');
-            btn.className = 'btn-ios-primary';
+            document.getElementById('dialog-title').textContent = 'Aprovar Decisão';
+            document.getElementById('dialog-desc').textContent = 'Esta proposta será aprovada e ativada imediatamente na governança, tornando-se a versão vigente para o tópico.';
+            document.getElementById('dialog-input-container').style.display = 'none';
+            const btn = document.getElementById('dialog-confirm-btn');
+            btn.className = 'btn-primary-action';
             btn.textContent = 'Aprovar Decisão';
-            document.getElementById('ios-modal').classList.add('ativo');
+            document.getElementById('dialog-overlay').classList.add('ativo');
         }}
 
         function abrirModalRejeicao(wsId, projId, topicoId, propostaId, versaoAtual) {{
-            modalPayload = {{
+            dadosModal = {{
                 tipo: 'rejeitar',
                 wsId, projId, topicoId, propostaId, versaoAtual
             }};
-            document.getElementById('modal-title').textContent = 'Rejeitar Proposta';
-            document.getElementById('modal-desc').textContent = 'Informe a justificativa técnica para rejeição. A proposta será arquivada como rejeitada.';
-            document.getElementById('modal-input-wrap').style.display = 'block';
-            document.getElementById('modal-reason-input').value = '';
-            const btn = document.getElementById('modal-confirm-btn');
-            btn.className = 'btn-ios-destructive';
+            document.getElementById('dialog-title').textContent = 'Rejeitar Proposta';
+            document.getElementById('dialog-desc').textContent = 'Informe a justificativa técnica para rejeição. A proposta será arquivada no histórico.';
+            document.getElementById('dialog-input-container').style.display = 'block';
+            document.getElementById('dialog-reason').value = '';
+            const btn = document.getElementById('dialog-confirm-btn');
+            btn.className = 'btn-danger-action';
             btn.textContent = 'Rejeitar Proposta';
-            document.getElementById('ios-modal').classList.add('ativo');
+            document.getElementById('dialog-overlay').classList.add('ativo');
         }}
 
         function fecharModal() {{
-            document.getElementById('ios-modal').classList.remove('ativo');
-            modalPayload = null;
+            document.getElementById('dialog-overlay').classList.remove('ativo');
+            dadosModal = null;
         }}
 
-        async function confirmarAcaoModal() {{
-            if (!modalPayload) return;
-            const p = modalPayload;
+        async function confirmarOperacaoModal() {{
+            if (!dadosModal) return;
+            const p = dadosModal;
 
             if (p.tipo === 'aprovar') {{
                 fecharModal();
@@ -1012,7 +1182,7 @@ public sealed class WebReviewHandler
                     }});
                     if (resp.ok) {{
                         exibirToast('Decisão aprovada e ativada com sucesso!');
-                        setTimeout(() => location.reload(), 1200);
+                        setTimeout(() => location.reload(), 1100);
                     }} else {{
                         const err = await resp.json();
                         exibirToast('Erro: ' + (err.message || 'Falha de validação'), 'erro');
@@ -1021,9 +1191,9 @@ public sealed class WebReviewHandler
                     exibirToast('Erro de comunicação com o servidor', 'erro');
                 }}
             }} else if (p.tipo === 'rejeitar') {{
-                const motivo = document.getElementById('modal-reason-input').value.trim();
+                const motivo = document.getElementById('dialog-reason').value.trim();
                 if (!motivo) {{
-                    exibirToast('Por favor, digite a justificativa.', 'erro');
+                    exibirToast('Por favor, informe a justificativa.', 'erro');
                     return;
                 }}
                 fecharModal();
@@ -1047,7 +1217,7 @@ public sealed class WebReviewHandler
                     }});
                     if (resp.ok) {{
                         exibirToast('Proposta rejeitada com sucesso.');
-                        setTimeout(() => location.reload(), 1200);
+                        setTimeout(() => location.reload(), 1100);
                     }} else {{
                         const err = await resp.json();
                         exibirToast('Erro: ' + (err.message || 'Falha de validação'), 'erro');

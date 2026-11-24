@@ -227,6 +227,30 @@ public sealed class RepositorioSentinelPostgreSql :
         return lista;
     }
 
+    public async Task<List<DecisaoAtual>> ObterDecisoesVigentesAsync(Guid espacoTrabalhoId, Guid? projetoId = null, CancellationToken ct = default)
+    {
+        await using var conexao = await AbrirConexaoComRlsAsync(espacoTrabalhoId, ct);
+        var sql = @"SELECT topic_id, workspace_id, project_id, topic_key, active_record_id, active_record_version,
+                           stream_version, status, pending_proposal_id, title, summary, justification,
+                           technical_keys, related_incident_ids, evidence, updated_at
+                    FROM decision_current
+                    WHERE workspace_id = @ws AND status = 'active' AND active_record_id IS NOT NULL";
+        if (projetoId.HasValue) sql += " AND project_id = @proj";
+        sql += " ORDER BY updated_at DESC";
+
+        await using var cmd = new NpgsqlCommand(sql, conexao);
+        cmd.Parameters.AddWithValue("ws", espacoTrabalhoId);
+        if (projetoId.HasValue) cmd.Parameters.AddWithValue("proj", projetoId.Value);
+
+        var lista = new List<DecisaoAtual>();
+        await using var leitor = await cmd.ExecuteReaderAsync(ct);
+        while (await leitor.ReadAsync(ct))
+        {
+            lista.Add(MapearDecisaoAtual(leitor));
+        }
+        return lista;
+    }
+
     private static DecisaoAtual MapearDecisaoAtual(NpgsqlDataReader leitor)
     {
         var statusStr = leitor.GetString(7);
@@ -1000,6 +1024,45 @@ public sealed class RepositorioSentinelPostgreSql :
             );
         }
         return null;
+    }
+
+    public async Task<List<IncidenteAtual>> ObterIncidentesAsync(Guid espacoTrabalhoId, Guid? projetoId = null, CancellationToken ct = default)
+    {
+        await using var conexao = await AbrirConexaoComRlsAsync(espacoTrabalhoId, ct);
+        var sql = @"SELECT incident_id, workspace_id, project_id, record_version, stream_version,
+                           status, title, summary, occurred_at, technical_keys, evidence, created_at
+                    FROM incident_current
+                    WHERE workspace_id = @ws";
+        if (projetoId.HasValue) sql += " AND project_id = @proj";
+        sql += " ORDER BY occurred_at DESC";
+
+        await using var cmd = new NpgsqlCommand(sql, conexao);
+        cmd.Parameters.AddWithValue("ws", espacoTrabalhoId);
+        if (projetoId.HasValue) cmd.Parameters.AddWithValue("proj", projetoId.Value);
+
+        var lista = new List<IncidenteAtual>();
+        await using var leitor = await cmd.ExecuteReaderAsync(ct);
+        while (await leitor.ReadAsync(ct))
+        {
+            var statusStr = leitor.GetString(5);
+            Enum.TryParse<StatusIncidente>(statusStr, true, out var status);
+
+            lista.Add(new IncidenteAtual(
+                leitor.GetGuid(0),
+                leitor.GetGuid(1),
+                leitor.GetGuid(2),
+                leitor.GetInt32(3),
+                leitor.GetInt32(4),
+                status,
+                leitor.GetString(6),
+                leitor.GetString(7),
+                leitor.GetFieldValue<DateTimeOffset>(8),
+                JsonSerializer.Deserialize<List<string>>(leitor.GetString(9)) ?? [],
+                JsonSerializer.Deserialize<List<Evidencia>>(leitor.GetString(10)) ?? [],
+                leitor.GetFieldValue<DateTimeOffset>(11)
+            ));
+        }
+        return lista;
     }
 
     public async Task<ResultadoRegistrarIncidente> RegistrarIncidenteAsync(ComandoRegistrarIncidente comando, CancellationToken ct = default)

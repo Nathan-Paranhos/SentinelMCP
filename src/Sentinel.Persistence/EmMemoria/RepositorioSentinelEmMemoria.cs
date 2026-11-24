@@ -140,6 +140,39 @@ public sealed class RepositorioSentinelEmMemoria :
             cargaDecisao.ChavesTecnicas, cargaDecisao.IncidentesRelacionadosIds,
             cargaDecisao.Evidencias, DateTimeOffset.UtcNow.AddDays(-4)
         );
+
+        var topicoPropostaId = Guid.Parse("f0f58a62-e095-4baf-9b56-69de5fa339cc");
+        var cargaPropostaId = Guid.Parse("a1a77b6a-cfdb-4c94-a51a-d0a0f66a2411");
+        _topicosDecisao[topicoPropostaId] = new TopicoDecisao(topicoPropostaId, ws1.EspacoTrabalhoId, p1.ProjetoId, "payment-circuit-breaker", 1, DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(-1));
+
+        var cargaProposta = new CargaMemoria(
+            cargaPropostaId, ws1.EspacoTrabalhoId, p1.ProjetoId,
+            "Circuit Breaker Distribuído para Gateways de Pagamento",
+            "Isolar falhas em cascata no gateway externo abrindo o circuito após 5 timeouts consecutivos em janela de 30 segundos.",
+            "Evitar sobrecarga e exaustão de conexões HTTP durante instabilidades ou lentidão prolongada no provedor bancário externo.",
+            ["BillingService", "CircuitBreaker", "payment-circuit-breaker", "Resilience"],
+            [incidenteId],
+            [
+                new Evidencia("adr", "ADR 004 Circuit Breaker de Cobranças", "https://example.com/adr/004-circuit-breaker"),
+                new Evidencia("pull_request", "PR 58 Implementação do Circuit Breaker", "https://example.com/pull/58")
+            ],
+            DateTimeOffset.UtcNow.AddDays(-1)
+        );
+        _cargasMemoria[cargaPropostaId] = cargaProposta;
+
+        var eventoPropostaPendente = new EventoMemoria(
+            Guid.NewGuid(), ws1.EspacoTrabalhoId, p1.ProjetoId, topicoPropostaId, 1, "DecisionProposed", 1,
+            DateTimeOffset.UtcNow.AddDays(-1), "agent-dev-1", "https://auth.sentinel.dev", "claude-code", cargaPropostaId, null
+        );
+        _eventosMemoria.Add(eventoPropostaPendente);
+
+        _decisoesAtuais[topicoPropostaId] = new DecisaoAtual(
+            topicoPropostaId, ws1.EspacoTrabalhoId, p1.ProjetoId, "payment-circuit-breaker",
+            null, null, 1, StatusDecisao.Proposta, cargaPropostaId,
+            cargaProposta.Titulo, cargaProposta.Resumo, cargaProposta.Justificativa,
+            cargaProposta.ChavesTecnicas, cargaProposta.IncidentesRelacionadosIds,
+            cargaProposta.Evidencias, DateTimeOffset.UtcNow.AddDays(-1)
+        );
     }
 
     public Task<EspacoTrabalho?> ObterEspacoTrabalhoAsync(Guid espacoTrabalhoId, CancellationToken ct = default)
@@ -203,6 +236,17 @@ public sealed class RepositorioSentinelEmMemoria :
     {
         var query = _decisoesAtuais.Values
             .Where(d => d.EspacoTrabalhoId == espacoTrabalhoId && d.PropostaPendenteId != null);
+
+        if (projetoId.HasValue)
+            query = query.Where(d => d.ProjetoId == projetoId.Value);
+
+        return Task.FromResult(query.ToList());
+    }
+
+    public Task<List<DecisaoAtual>> ObterDecisoesVigentesAsync(Guid espacoTrabalhoId, Guid? projetoId = null, CancellationToken ct = default)
+    {
+        var query = _decisoesAtuais.Values
+            .Where(d => d.EspacoTrabalhoId == espacoTrabalhoId && d.Situacao == StatusDecisao.Ativa && d.RegistroAtivoId != null);
 
         if (projetoId.HasValue)
             query = query.Where(d => d.ProjetoId == projetoId.Value);
@@ -664,6 +708,17 @@ public sealed class RepositorioSentinelEmMemoria :
             return Task.FromResult<IncidenteAtual?>(inc);
         }
         return Task.FromResult<IncidenteAtual?>(null);
+    }
+
+    public Task<List<IncidenteAtual>> ObterIncidentesAsync(Guid espacoTrabalhoId, Guid? projetoId = null, CancellationToken ct = default)
+    {
+        var query = _incidentesAtuais.Values
+            .Where(i => i.EspacoTrabalhoId == espacoTrabalhoId);
+
+        if (projetoId.HasValue)
+            query = query.Where(i => i.ProjetoId == projetoId.Value);
+
+        return Task.FromResult(query.ToList());
     }
 
     public Task<ResultadoRegistrarIncidente> RegistrarIncidenteAsync(ComandoRegistrarIncidente comando, CancellationToken ct = default)
