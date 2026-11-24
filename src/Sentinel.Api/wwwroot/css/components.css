@@ -203,9 +203,14 @@
     transform: scale(0.98);
 }
 
-.btn-macos-primary {
+.btn-macos-primary,
+.btn-macos-primary:visited,
+.btn-macos-primary:focus,
+.btn-macos-primary:active {
     background-color: var(--action-primary);
-    color: var(--action-primary-fg);
+    color: var(--action-primary-fg) !important;
+    -webkit-text-fill-color: var(--action-primary-fg) !important;
+    font-weight: 600;
 }
 
 .btn-macos-primary:hover {

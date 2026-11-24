@@ -22,4 +22,7 @@ coverage/
 # Archives & Binaries
 *.zip
 *.tar.gz
+preview.html
+SentinelMascot.tsx
+sentinelTimeline.ts
 

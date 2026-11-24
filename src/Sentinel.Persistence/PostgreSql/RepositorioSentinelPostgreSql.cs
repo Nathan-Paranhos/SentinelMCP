@@ -55,6 +55,27 @@ public sealed class RepositorioSentinelPostgreSql :
         return null;
     }
 
+    public async Task<List<EspacoTrabalho>> ObterTodosEspacosTrabalhoAsync(CancellationToken ct = default)
+    {
+        await using var conexao = new NpgsqlConnection(_stringConexao);
+        await conexao.OpenAsync(ct);
+        await using var cmd = new NpgsqlCommand(
+            "SELECT workspace_id, name, slug, created_at FROM workspaces ORDER BY created_at ASC", conexao);
+
+        var resultado = new List<EspacoTrabalho>();
+        await using var leitor = await cmd.ExecuteReaderAsync(ct);
+        while (await leitor.ReadAsync(ct))
+        {
+            resultado.Add(new EspacoTrabalho(
+                leitor.GetGuid(0),
+                leitor.GetString(1),
+                leitor.GetString(2),
+                leitor.GetFieldValue<DateTimeOffset>(3)
+            ));
+        }
+        return resultado;
+    }
+
     public async Task<VinculoMembro?> ObterVinculoMembroAsync(Guid espacoTrabalhoId, string emissor, string sujeito, CancellationToken ct = default)
     {
         await using var conexao = await AbrirConexaoComRlsAsync(espacoTrabalhoId, ct);

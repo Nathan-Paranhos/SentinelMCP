@@ -7,6 +7,7 @@ namespace Sentinel.Persistence.Contratos;
 public interface IRepositorioEspacoTrabalho
 {
     Task<EspacoTrabalho?> ObterEspacoTrabalhoAsync(Guid espacoTrabalhoId, CancellationToken ct = default);
+    Task<List<EspacoTrabalho>> ObterTodosEspacosTrabalhoAsync(CancellationToken ct = default);
     Task<VinculoMembro?> ObterVinculoMembroAsync(Guid espacoTrabalhoId, string emissor, string sujeito, CancellationToken ct = default);
     Task<Projeto?> ObterProjetoAsync(Guid espacoTrabalhoId, Guid projetoId, CancellationToken ct = default);
     Task<List<Projeto>> ObterProjetosPorEspacoTrabalhoAsync(Guid espacoTrabalhoId, CancellationToken ct = default);

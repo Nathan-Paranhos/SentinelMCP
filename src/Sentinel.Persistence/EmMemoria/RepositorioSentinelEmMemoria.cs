@@ -181,6 +181,12 @@ public sealed class RepositorioSentinelEmMemoria :
         return Task.FromResult(ws);
     }
 
+    public Task<List<EspacoTrabalho>> ObterTodosEspacosTrabalhoAsync(CancellationToken ct = default)
+    {
+        var lista = _espacosTrabalho.Values.OrderBy(e => e.CriadoEm).ToList();
+        return Task.FromResult(lista);
+    }
+
     public Task<VinculoMembro?> ObterVinculoMembroAsync(Guid espacoTrabalhoId, string emissor, string sujeito, CancellationToken ct = default)
     {
         var chave = $"{espacoTrabalhoId}:{emissor}:{sujeito}";

@@ -1,3 +1,6 @@
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Hosting;
 using Sentinel.Core.Excecoes;
 using Sentinel.Core.Modelos;
 using Sentinel.Persistence.Contratos;
@@ -27,10 +30,17 @@ public interface IServicoIdentidade
 public sealed class ServicoIdentidade : IServicoIdentidade
 {
     private readonly IRepositorioEspacoTrabalho _repositorioEspacoTrabalho;
+    private readonly IConfiguration? _config;
+    private readonly IWebHostEnvironment? _env;
 
-    public ServicoIdentidade(IRepositorioEspacoTrabalho repositorioEspacoTrabalho)
+    public ServicoIdentidade(
+        IRepositorioEspacoTrabalho repositorioEspacoTrabalho,
+        IConfiguration? config = null,
+        IWebHostEnvironment? env = null)
     {
         _repositorioEspacoTrabalho = repositorioEspacoTrabalho;
+        _config = config;
+        _env = env;
     }
 
     public IdentidadeResolvida ResolverIdentidade(HttpContext contextoHttp)
@@ -42,9 +52,15 @@ public sealed class ServicoIdentidade : IServicoIdentidade
         }
 
         var token = cabecalhoAutorizacao["Bearer ".Length..].Trim();
+        var permiteMock = (_env?.IsDevelopment() ?? true) || (_config?.GetValue<bool>("Sentinel:AllowMockTokens") ?? true);
 
         if (token.StartsWith("mock:", StringComparison.OrdinalIgnoreCase))
         {
+            if (!permiteMock)
+            {
+                throw new ExcecaoDeNaoAutorizado("Tokens mock são estritamente desabilitados em ambiente de produção. Utilize credenciais válidas configuradas em Sentinel:ApiKeys.");
+            }
+
             var dadosBrutos = token["mock:".Length..].Trim();
             string emissor = "https://auth.sentinel.dev";
             string sujeito = "agent-dev-1";
@@ -96,19 +112,37 @@ public sealed class ServicoIdentidade : IServicoIdentidade
             return new IdentidadeResolvida(emissor, sujeito, clientId, escopos, papel);
         }
 
-        var tokensJwtFicticios = new Dictionary<string, (string Sujeito, string Emissor, string? ClienteId, List<string> Escopos, PapelUsuario Papel)>
+        if (_config != null)
         {
-            ["agent-token"] = ("agent-dev-1", "https://auth.sentinel.dev", "claude-code", ["read:memory", "write:decision", "write:incident"], PapelUsuario.Contributor),
-            ["maintainer-token"] = ("maintainer-alice", "https://auth.sentinel.dev", null, ["read:memory", "write:decision", "write:incident", "admin:all"], PapelUsuario.Maintainer),
-            ["reader-token"] = ("reader-bob", "https://auth.sentinel.dev", "cursor-ide", ["read:memory"], PapelUsuario.Reader)
-        };
-
-        if (tokensJwtFicticios.TryGetValue(token, out var info))
-        {
-            return new IdentidadeResolvida(info.Emissor, info.Sujeito, info.ClienteId, info.Escopos, info.Papel);
+            var secaoChave = _config.GetSection($"Sentinel:ApiKeys:{token}");
+            if (secaoChave.Exists())
+            {
+                var sujeito = secaoChave["Subject"] ?? "agent-dev-1";
+                var emissor = secaoChave["Issuer"] ?? "https://auth.sentinel.dev";
+                var clientId = secaoChave["ClientId"];
+                var escopos = secaoChave.GetSection("Scopes").Get<List<string>>() ?? ["read:memory", "write:decision", "write:incident"];
+                var papelTexto = secaoChave["Role"] ?? "Contributor";
+                Enum.TryParse<PapelUsuario>(papelTexto, true, out var papel);
+                return new IdentidadeResolvida(emissor, sujeito, clientId, escopos, papel);
+            }
         }
 
-        throw new ExcecaoDeNaoAutorizado($"Token Bearer inválido ou não reconhecido: '{token}'.");
+        if (permiteMock)
+        {
+            var tokensDesenvolvimento = new Dictionary<string, (string Sujeito, string Emissor, string? ClienteId, List<string> Escopos, PapelUsuario Papel)>
+            {
+                ["agent-token"] = ("agent-dev-1", "https://auth.sentinel.dev", "claude-code", ["read:memory", "write:decision", "write:incident"], PapelUsuario.Contributor),
+                ["maintainer-token"] = ("maintainer-alice", "https://auth.sentinel.dev", null, ["read:memory", "write:decision", "write:incident", "admin:all"], PapelUsuario.Maintainer),
+                ["reader-token"] = ("reader-bob", "https://auth.sentinel.dev", "cursor-ide", ["read:memory"], PapelUsuario.Reader)
+            };
+
+            if (tokensDesenvolvimento.TryGetValue(token, out var info))
+            {
+                return new IdentidadeResolvida(info.Emissor, info.Sujeito, info.ClienteId, info.Escopos, info.Papel);
+            }
+        }
+
+        throw new ExcecaoDeNaoAutorizado($"Token Bearer inválido ou não autorizado: '{token}'.");
     }
 
     public async Task<VinculoMembro> AutenticarEAutorizarAsync(

@@ -50,10 +50,30 @@ if (args.Contains("--migrate") && !string.IsNullOrEmpty(stringConexao))
     var migrador = new MigradorBancoDados(stringConexao);
     var caminhoMigracoes = Path.Combine(AppContext.BaseDirectory, "../../../db/migrations");
     if (!Directory.Exists(caminhoMigracoes))
+        caminhoMigracoes = Path.Combine(AppContext.BaseDirectory, "db/migrations");
+    if (!Directory.Exists(caminhoMigracoes))
         caminhoMigracoes = Path.Combine(Directory.GetCurrentDirectory(), "db/migrations");
     await migrador.MigrarAsync(caminhoMigracoes);
     Console.WriteLine("Migrações aplicadas com sucesso.");
     return;
+}
+
+if (string.Equals(provedorArmazenamento, "PostgreSQL", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(stringConexao))
+{
+    var autoMigrar = builder.Configuration.GetValue<bool>("Sentinel:AutoMigrate", true);
+    if (autoMigrar)
+    {
+        var migrador = new MigradorBancoDados(stringConexao);
+        var caminhoMigracoes = Path.Combine(AppContext.BaseDirectory, "../../../db/migrations");
+        if (!Directory.Exists(caminhoMigracoes))
+            caminhoMigracoes = Path.Combine(AppContext.BaseDirectory, "db/migrations");
+        if (!Directory.Exists(caminhoMigracoes))
+            caminhoMigracoes = Path.Combine(Directory.GetCurrentDirectory(), "db/migrations");
+        if (Directory.Exists(caminhoMigracoes))
+        {
+            await migrador.MigrarAsync(caminhoMigracoes);
+        }
+    }
 }
 
 if (args.Contains("--rebuild-projections"))

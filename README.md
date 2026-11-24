@@ -22,23 +22,23 @@
 
 ## Sumário
 
-- [Visão Geral](#-visão-geral)
+- [Visão Geral](#visão-geral)
   - [O Problema dos Agentes Autônomos](#o-problema-dos-agentes-autônomos)
   - [A Solução Sentinel](#a-solução-sentinel)
-- [Pilares de Engenharia](#-pilares-de-engenharia)
-- [Arquitetura do Sistema](#-arquitetura-do-sistema)
-- [Interface Nativa macOS (Organic macOS UX)](#-interface-nativa-macos)
-- [Contrato de Ferramentas MCP](#-tools-mcp-oficiais)
-- [Configuração com Clientes MCP](#-integração-com-clientes-mcp)
+- [Pilares de Engenharia](#pilares-de-engenharia)
+- [Arquitetura do Sistema](#arquitetura-do-sistema)
+- [Interface Nativa macOS](#interface-nativa-macos)
+- [Tools MCP Oficiais](#tools-mcp-oficiais)
+- [Integração com Clientes MCP](#integração-com-clientes-mcp)
   - [Claude Code](#claude-code)
   - [Cursor IDE](#cursor-ide)
-- [Quick Start & Execução](#-quick-start)
-  - [Ambiente Conteinerizado (Docker Compose)](#docker-compose)
-  - [Desenvolvimento Local (.NET 9 SDK)](#desenvolvimento-local)
-- [Critérios de Aceite Formalmente Testados](#-critérios-de-aceite-ac-01-a-ac-08)
-- [Estrutura da Solução](#-estrutura-da-solução)
-- [Segurança & Privacidade](#-segurança--privacidade)
-- [Licença](#-licença)
+- [Quick Start](#quick-start)
+  - [Docker Compose](#docker-compose)
+  - [Desenvolvimento Local](#desenvolvimento-local)
+- [Critérios de Aceite (AC-01 a AC-08)](#critérios-de-aceite-ac-01-a-ac-08)
+- [Estrutura da Solução](#estrutura-da-solução)
+- [Segurança & Privacidade](#segurança--privacidade)
+- [Licença](#licença)
 
 ---
 
@@ -248,7 +248,7 @@ Para conectar o Sentinel ao **Claude Code CLI**, configure seu arquivo de config
     "sentinel": {
       "url": "http://localhost:5000/mcp",
       "headers": {
-        "Authorization": "Bearer mock:https://auth.sentinel.dev:agent-dev-1:Contributor:read:memory,write:decision,write:incident:claude-code"
+        "Authorization": "Bearer sentinel-dev-agent-key"
       }
     }
   }
