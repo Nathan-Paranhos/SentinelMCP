@@ -148,7 +148,7 @@ public sealed class AdminEndpointHandler
         }));
     });
 
-    public sealed record RequisicaoCriarWorkspace(string? Name, string? Slug, Guid? WorkspaceId);
+    public sealed record RequisicaoCriarWorkspace(string? Name, string? Slug, Guid? WorkspaceId, string? OwnerIssuer = null, string? OwnerSubject = null, string? OwnerRole = null);
 
     public Task<IResult> HandleCreateWorkspaceAsync(HttpContext ctx) => ExecutarAsync(ctx, mutacao: true, async ator =>
     {
@@ -157,8 +157,38 @@ public sealed class AdminEndpointHandler
             return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
 
         var ws = await _servico.CriarEspacoTrabalhoAsync(ator, req.Name ?? string.Empty, req.Slug ?? string.Empty, req.WorkspaceId, ctx.RequestAborted);
+        if (!string.IsNullOrWhiteSpace(req.OwnerSubject))
+        {
+            if (!ConversorDeEnumeradores.TentarConverterPapel(req.OwnerRole ?? "Maintainer", out var papelDono))
+                return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Papel do proprietário inválido." });
+
+            var emissorDono = string.IsNullOrWhiteSpace(req.OwnerIssuer)
+                ? (_config["Sentinel:Web:LocalIssuer"] ?? "https://auth.sentinel.dev")
+                : req.OwnerIssuer.Trim();
+            await _servico.ConfigurarVinculoAsync(ator, ws.EspacoTrabalhoId, emissorDono, req.OwnerSubject.Trim(), papelDono, true, ctx.RequestAborted);
+        }
+
         _log.LogInformation("Workspace {WorkspaceId} ({Slug}) criado por {Sujeito}", ws.EspacoTrabalhoId, ws.IdentificadorSlug, ator.Sujeito);
         return Results.Created($"/api/admin/workspaces/{ws.EspacoTrabalhoId}", new
+        {
+            workspaceId = ws.EspacoTrabalhoId,
+            name = ws.Nome,
+            slug = ws.IdentificadorSlug,
+            createdAt = ws.CriadoEm
+        });
+    });
+
+    public sealed record RequisicaoAtualizarWorkspace(string? Name);
+
+    public Task<IResult> HandleUpdateWorkspaceAsync(HttpContext ctx, Guid workspaceId) => ExecutarAsync(ctx, mutacao: true, async ator =>
+    {
+        var req = await JsonSerializer.DeserializeAsync<RequisicaoAtualizarWorkspace>(ctx.Request.Body, OpcoesJson, ctx.RequestAborted);
+        if (req == null)
+            return Results.BadRequest(new { code = "VALIDATION_ERROR", message = "Corpo JSON inválido." });
+
+        var ws = await _servico.AtualizarEspacoTrabalhoAsync(ator, workspaceId, req.Name ?? string.Empty, ctx.RequestAborted);
+        _log.LogInformation("Workspace {WorkspaceId} salvo com nome '{Nome}' por {Sujeito}", ws.EspacoTrabalhoId, ws.Nome, ator.Sujeito);
+        return Results.Ok(new
         {
             workspaceId = ws.EspacoTrabalhoId,
             name = ws.Nome,

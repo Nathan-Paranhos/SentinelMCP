@@ -15,7 +15,7 @@ Este documento instrui agentes autônomos e desenvolvedores sobre o funcionament
   - `Validacao/ValidadorDeInvariantes.cs`, `Modelos/`, `Comandos/`, `Consultas/`, `Excecoes/` (códigos de erro estáveis), `Comum/` (`Relogio`, `SegurancaLocal`).
 - `src/Sentinel.Persistence`: `EmMemoria/` (dev/testes com persistência atômica opcional via `Sentinel:LocalDataFile`) e `PostgreSql/` (Npgsql com SQL puro, RLS por transação, migrador com lock consultivo).
 - `src/Sentinel.Api`: `Program.cs` (composição, CLI HTTP e `--stdio`, autenticação, pipeline), `Mcp/` (`POST /mcp` JSON-RPC stateless com negociação `2025-11-25`/`2025-06-18`/`2025-03-26`/`2024-11-05`, `/mcp/sse` via SDK oficial `ModelContextProtocol.AspNetCore`, `--stdio` para clientes CLI locais, `outputSchema`, `annotations`, `resources/*` e `prompts/*`), `Admin/` (API REST `/api/admin/*` para workspaces, projetos, chaves de API, usuários locais e vínculos), `Auth/` (chaves de API SHA-256 dinâmicas e estáticas, JWT e mock apenas em testes), `WebReview/` (`/auth/setup`, `/auth/login`, `/review` e `/api/review/*`), `Operacao/` (diagnósticos OpenTelemetry e job de retenção), `wwwroot/`.
-- `db/migrations` (001 schema, 002 RLS, 003 segurança/busca/integridade, 004 grants administrativos de escrita, 005 contas locais + chaves de API SHA-256 + proteção de projetos), `db/fixtures` (dados opcionais para `--seed-demo` e Testcontainers), `db/docker` (criação do papel/login no compose).
+- `db/migrations` (001 schema, 002 RLS, 003 segurança/busca/integridade, 004 grants administrativos de escrita, 005 contas locais + chaves de API SHA-256 + proteção de projetos, 006 grant de atualização de nome de workspace), `db/fixtures` (dados opcionais para `--seed-demo` e Testcontainers), `db/docker` (criação do papel/login no compose).
 - `tests/Sentinel.UnitTests`: invariantes, redutores, idempotência e `ServicoDeMemoria`.
 - `tests/Sentinel.ContractTests`: protocolo MCP e schemas das tools.
 - `tests/Sentinel.IntegrationTests`: AC-01 a AC-08 por HTTP, contra InMemory e contra PostgreSQL via Testcontainers (inclui testes de RLS e de imutabilidade do log).
@@ -105,8 +105,9 @@ docker compose run --rm sentinel-migrate --rebuild-projections
 ## API de Administração (`/api/admin/*`)
 A API administrativa permite gerenciar workspaces, projetos, chaves de API, usuários locais e vínculos sem depender de scripts SQL diretos:
 - `GET /api/admin/workspaces`: lista workspaces (`AdminSistema` lista todos; sessão web lista apenas os que o usuário integra).
-- `POST /api/admin/workspaces`: cria um workspace (`{ "id": "uuid", "slug": "slug-valido", "nome": "Nome" }`) — exige `X-Admin-Key`.
+- `POST /api/admin/workspaces`: cria um workspace (`{ "name": "Nome", "slug": "slug-valido", "workspaceId": "uuid-opcional", "ownerSubject": "opcional", "ownerIssuer": "opcional" }`) — exige `X-Admin-Key`.
 - `GET /api/admin/workspaces/{workspaceId}`: obtém workspace, projetos e vínculos (`X-Admin-Key` ou `Maintainer` autenticado no workspace).
+- `PUT /api/admin/workspaces/{workspaceId}`: atualiza o nome do workspace (`{ "name": "Novo Nome" }`) — exige `X-Admin-Key` ou `Maintainer` autenticado + CSRF.
 - `GET /api/admin/workspaces/{workspaceId}/projects`: lista os projetos do workspace (`X-Admin-Key` ou membro autenticado).
 - `POST /api/admin/workspaces/{workspaceId}/projects`: cria um projeto associado (`{ "name": "Nome", "slug": "slug-valido" }`) — exige CSRF quando autenticado via cookie web.
 - `DELETE /api/admin/workspaces/{workspaceId}/projects/{projectId}`: remove um projeto sem histórico (`409 Conflict` se já houver eventos, tópicos ou incidentes). Exige `Maintainer` + CSRF (ou `X-Admin-Key`).

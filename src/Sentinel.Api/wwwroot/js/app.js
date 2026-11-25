@@ -9,6 +9,8 @@ import {
     buscarDetalhesWorkspaceAdmin,
     obterWorkspaceIdDaUrl,
     postarJson,
+    atualizarWorkspaceAdmin,
+    criarWorkspaceAdmin,
     criarProjetoAdmin,
     removerProjetoAdmin,
     configurarVinculoAdmin,
@@ -474,6 +476,13 @@ function setupDelegatedEvents() {
             }
         } else if (alvo.id === 'admin-proj-slug') {
             alvo.dataset.edited = '1';
+        } else if (alvo.id === 'admin-new-ws-name') {
+            const slugEl = document.getElementById('admin-new-ws-slug');
+            if (slugEl && !slugEl.dataset.edited) {
+                slugEl.value = gerarSlugSugerido(alvo.value);
+            }
+        } else if (alvo.id === 'admin-new-ws-slug') {
+            alvo.dataset.edited = '1';
         }
     });
 
@@ -511,6 +520,10 @@ function setupDelegatedEvents() {
 
         if (acao === 'verify-receipt') {
             executarAuditoriaComprovante();
+        } else if (acao === 'save-workspace-name') {
+            executarAtualizacaoWorkspace(form);
+        } else if (acao === 'create-workspace') {
+            executarCriacaoWorkspace(form);
         } else if (acao === 'create-project') {
             executarCriacaoProjeto(form);
         } else if (acao === 'save-membership') {
@@ -1448,6 +1461,7 @@ function renderTimelineView(container) {
 function gerarConfigClienteMcp(cliente, origin, tokenChave, wsId, projId) {
     const mcpUrl = `${origin}/mcp`;
     const chave = tokenChave || '<SUA_CHAVE_API_SENTINEL>';
+    const ehPostgres = String(appStore.get('sistema')?.armazenamento || '').toLowerCase() === 'postgresql';
     switch (cliente) {
         case 'codex':
             return {
@@ -1466,7 +1480,7 @@ Authorization = "Bearer ${chave}"
 # Opção C — Transporte local STDIO (sem porta HTTP; --no-launch-profile mantém stdout limpo):
 # [mcp_servers.sentinel]
 # command = "dotnet"
-# args = ["run", "--no-build", "--no-launch-profile", "--project", "<CAMINHO_REPO>/src/Sentinel.Api", "--", "--stdio", "--token", "${chave}"]
+# args = ["run", "--no-build", "--no-launch-profile", "--project", "<CAMINHO_REPO>/src/Sentinel.Api", "--", "--stdio", "--token", "${chave}"]${ehPostgres ? '' : '\n# [mcp_servers.sentinel.env]\n# ASPNETCORE_ENVIRONMENT = "Development"'}
 
 # Primeiro prompt recomendado no Codex:
 # "Chame list_workspaces e query_context no Sentinel (workspaceId=${wsId}, projectId=${projId})."`
@@ -1479,7 +1493,7 @@ claude mcp add --transport http sentinel ${mcpUrl} \\
   --header "Authorization: Bearer ${chave}"
 
 # STDIO local:
-# claude mcp add sentinel -- dotnet run --no-build --no-launch-profile --project ./src/Sentinel.Api -- --stdio --token "${chave}"`
+# claude mcp add sentinel ${ehPostgres ? '' : '-e ASPNETCORE_ENVIRONMENT=Development '}-- dotnet run --no-build --no-launch-profile --project ./src/Sentinel.Api -- --stdio --token "${chave}"`
             };
         case 'cursor':
             return {
@@ -1796,6 +1810,7 @@ function renderAdminView(container) {
     const vinculos = detalhes ? (detalhes.memberships || []) : [];
     const chaves = appStore.get('apiKeys') || [];
     const usuarios = appStore.get('localUsers') || [];
+    const workspaces = appStore.get('workspaces') || [];
     const sistema = appStore.get('sistema') || {};
     const modoOidc = sistema.autenticacaoWeb === 'OIDC PKCE';
 
@@ -1803,11 +1818,87 @@ function renderAdminView(container) {
         <div class="overview-view">
             <div class="overview-hero">
                 <div class="overview-badge">Administração &bull; ${escapeHtml(ws ? ws.nome : '')}</div>
-                <h1 class="overview-title">Projetos, Chaves de API &amp; Controle de Acesso</h1>
-                <p class="overview-desc">Gerencie projetos, chaves SHA-256 para agentes MCP e vínculos do workspace. Todas as exclusões exigem confirmação nominal.</p>
+                <h1 class="overview-title">Workspaces, Projetos, Chaves &amp; Controle de Acesso</h1>
+                <p class="overview-desc">Alterações em workspaces, projetos, chaves SHA-256 e contas locais são salvas automaticamente na persistência configurada.</p>
             </div>
 
             ${renderAvisoChaveGeradaHtml()}
+
+            <div class="overview-section">
+                <div class="overview-section-header">
+                    <div class="overview-section-title">Workspaces Salvos &amp; Persistência (${workspaces.length})</div>
+                    <span class="mono-tag">${escapeHtml(sistema.persistenciaLocal || sistema.armazenamento || 'Local')}</span>
+                </div>
+
+                <div class="callout-guide">
+                    <div>
+                        <strong>Persistência e Autenticação ativos:</strong>
+                        Dados gravados em <code>${escapeHtml(sistema.persistenciaLocal || sistema.armazenamento || 'Local')}</code> &bull;
+                        Sessão Web via <strong>${escapeHtml(sistema.autenticacaoWeb || 'Local PBKDF2')}</strong> (cookie HttpOnly + CSRF) &bull;
+                        Agentes MCP autenticados apenas por chave <code>snt_...</code> (SHA-256) ou JWT.
+                    </div>
+                </div>
+
+                ${ws ? `
+                    <div class="panel-card">
+                        <form data-action="save-workspace-name" class="form-grid">
+                            <div class="form-field">
+                                <label for="admin-ws-name">Nome do Workspace Atual (slug: ${escapeHtml(ws.slug)})</label>
+                                <input id="admin-ws-name" type="text" class="form-input" maxlength="120" required value="${escapeHtml(ws.nome || '')}">
+                            </div>
+                            <div>
+                                <button type="submit" class="btn-macos btn-macos-primary">Salvar Workspace</button>
+                            </div>
+                        </form>
+                    </div>
+                ` : ''}
+
+                <div class="panel-card">
+                    <form data-action="create-workspace" class="form-grid">
+                        <div class="form-field">
+                            <label for="admin-new-ws-name">Novo Workspace</label>
+                            <input id="admin-new-ws-name" type="text" class="form-input" maxlength="120" required placeholder="Ex.: Produto Financeiro">
+                        </div>
+                        <div class="form-field">
+                            <label for="admin-new-ws-slug">Slug ASCII</label>
+                            <input id="admin-new-ws-slug" type="text" class="form-input" maxlength="80" required placeholder="produto-financeiro">
+                        </div>
+                        <div class="form-field">
+                            <label for="admin-new-ws-key">Chave Admin (ADMIN_API_KEY)</label>
+                            <div class="password-input-wrap">
+                                <input id="admin-new-ws-key" type="password" class="form-input" autocomplete="off" required placeholder="Chave administrativa">
+                                <button type="button" class="password-toggle-btn" data-action="toggle-password" data-target-input="admin-new-ws-key" aria-label="Mostrar chave" title="Mostrar chave" aria-pressed="false">${Icons.eye}</button>
+                            </div>
+                        </div>
+                        <div>
+                            <button type="submit" class="btn-macos btn-macos-secondary">Criar Novo Workspace</button>
+                        </div>
+                    </form>
+                    <p style="margin:0.65rem 0 0;font-size:0.78rem;color:var(--text-secondary);">
+                        ${sistema.ambiente === 'Development'
+                            ? 'Criar outro workspace exige <code>ADMIN_API_KEY</code> (em Development local sem variável configurada, o padrão é <code>sentinel-admin-dev-key</code>). Você será vinculado automaticamente como Maintainer.'
+                            : 'Criar outro workspace exige a chave administrativa definida em <code>ADMIN_API_KEY</code>. Você será vinculado automaticamente como Maintainer.'}
+                    </p>
+                </div>
+
+                ${workspaces.map(w => {
+                    const ativo = ws && w.id === ws.id;
+                    return `
+                        <div class="overview-list-row" style="cursor:default;">
+                            <div class="overview-row-left">
+                                <span class="overview-row-title">${escapeHtml(w.nome)} ${ativo ? '<span class="status-pill active-state">Atual</span>' : ''}</span>
+                                <span class="overview-row-sub">slug: <code>${escapeHtml(w.slug)}</code></span>
+                            </div>
+                            <div class="overview-row-right">
+                                <button type="button" class="copy-chip" data-action="copy-text" data-copy-value="${escapeHtml(w.id)}" data-copy-label="Workspace ID">
+                                    ${Icons.copy} ${escapeHtml(String(w.id).slice(0, 8))}...
+                                </button>
+                                ${!ativo ? `<a class="btn-macos btn-macos-secondary btn-macos-sm" href="/review?workspaceId=${encodeURIComponent(w.id)}">Abrir</a>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('')}
+            </div>
 
             <div class="overview-section">
                 <div class="overview-section-header">
@@ -2067,6 +2158,50 @@ async function carregarAdminWorkspace(wsId) {
     } finally {
         adminLoadingWsId = null;
     }
+}
+
+async function executarAtualizacaoWorkspace(form) {
+    const ws = appStore.get('workspace');
+    const nameEl = document.getElementById('admin-ws-name');
+    if (!ws || !nameEl) return;
+
+    const nome = nameEl.value.trim();
+    const res = await atualizarWorkspaceAdmin(ws.id, nome, appStore.get('csrf'));
+    if (res.status === 401) {
+        redirecionarParaLogin();
+        return;
+    }
+    if (!res.ok) {
+        mostrarToast((res.erro && res.erro.message) || 'Não foi possível salvar o workspace.', 'erro');
+        return;
+    }
+    mostrarToast('Workspace salvo com sucesso.', 'sucesso');
+    await recarregarEstado();
+    await carregarAdminWorkspace(ws.id);
+}
+
+async function executarCriacaoWorkspace(form) {
+    const nameEl = document.getElementById('admin-new-ws-name');
+    const slugEl = document.getElementById('admin-new-ws-slug');
+    const keyEl = document.getElementById('admin-new-ws-key');
+    const usuario = appStore.get('usuario') || {};
+    if (!nameEl || !slugEl || !keyEl) return;
+
+    const res = await criarWorkspaceAdmin(
+        nameEl.value.trim(),
+        slugEl.value.trim(),
+        keyEl.value,
+        usuario.sujeito || null,
+        usuario.emissor || null
+    );
+    if (!res.ok || !res.corpo) {
+        mostrarToast((res.erro && res.erro.message) || 'Não foi possível criar o workspace. Verifique ADMIN_API_KEY e o slug.', 'erro');
+        return;
+    }
+    mostrarToast('Novo workspace criado e salvo com sucesso.', 'sucesso');
+    form.reset();
+    delete slugEl.dataset.edited;
+    window.location.href = '/review?workspaceId=' + encodeURIComponent(res.corpo.workspaceId);
 }
 
 async function executarCriacaoProjeto(form) {

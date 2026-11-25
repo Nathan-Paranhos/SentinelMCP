@@ -5,6 +5,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>Sentinel.Api</RootNamespace>
+    <DefaultItemExcludes>$(DefaultItemExcludes);data/**</DefaultItemExcludes>
   </PropertyGroup>
 
   <ItemGroup>

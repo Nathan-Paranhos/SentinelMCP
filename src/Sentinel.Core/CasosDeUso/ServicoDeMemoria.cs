@@ -445,6 +445,16 @@ public sealed class ServicoDeMemoria
         return await _espacos.CriarEspacoTrabalhoAsync(nome.Trim(), slug.Trim().ToLowerInvariant(), espacoTrabalhoId, ct);
     }
 
+    public async Task<EspacoTrabalho> AtualizarEspacoTrabalhoAsync(Ator ator, Guid espacoTrabalhoId, string nome, CancellationToken ct = default)
+    {
+        await ExigirAdminSistemaOuMantenedorAsync(ator, espacoTrabalhoId, ct);
+        if (string.IsNullOrWhiteSpace(nome) || nome.Trim().Length > 120)
+            throw new ExcecaoDeValidacao("Nome do workspace deve ter entre 1 e 120 caracteres.");
+
+        return await _espacos.AtualizarEspacoTrabalhoAsync(espacoTrabalhoId, nome.Trim(), ct)
+            ?? throw new ExcecaoDeNaoEncontrado($"Workspace {espacoTrabalhoId} não encontrado.");
+    }
+
     public async Task<List<EspacoTrabalho>> ListarTodosEspacosAsync(Ator ator, CancellationToken ct = default)
     {
         if (ator.Canal == CanalDeAcesso.AdminSistema)

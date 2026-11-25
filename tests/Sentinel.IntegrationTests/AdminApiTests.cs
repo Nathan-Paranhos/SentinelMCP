@@ -161,9 +161,19 @@ public abstract class AdminApiBase
         // Mantenedor não cria workspaces globais (reservado a X-Admin-Key)
         Assert.Equal(HttpStatusCode.Forbidden, (await alice.PostarAsync("/api/admin/workspaces", new { name = "Global", slug = $"ws-g-{Guid.NewGuid():N}"[..16] })).StatusCode);
 
-        // Mutação sem CSRF falha; com CSRF cria projeto no próprio workspace
+        // Mutação sem CSRF falha; com CSRF cria projeto e salva alteração no workspace
         var semCsrf = await alice.PostarAsync($"/api/admin/workspaces/{WsA}/projects", new { name = "Sem CSRF", slug = "sem-csrf" }, comCsrf: false);
         Assert.Equal(HttpStatusCode.BadRequest, semCsrf.StatusCode);
+
+        var renomearReq = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/workspaces/{WsA}")
+        {
+            Content = JsonContent.Create(new { name = "Engenharia Central Salva" })
+        };
+        renomearReq.Headers.Add("X-CSRF-Token", alice.TokenCsrf);
+        var renomearResp = await alice.Http.SendAsync(renomearReq);
+        Assert.Equal(HttpStatusCode.OK, renomearResp.StatusCode);
+        var renomeado = await renomearResp.Content.ReadFromJsonAsync<JsonElement>();
+        Assert.Equal("Engenharia Central Salva", renomeado.GetProperty("name").GetString());
 
         var projSlug = $"proj-web-{Guid.NewGuid():N}"[..20];
         var comCsrf = await alice.PostarAsync($"/api/admin/workspaces/{WsA}/projects", new { name = "Projeto Web", slug = projSlug }, comCsrf: true);

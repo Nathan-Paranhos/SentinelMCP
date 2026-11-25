@@ -19,6 +19,7 @@ public interface IRepositorioEspacoTrabalho
     // Administração de workspaces, projetos e vínculos
     Task<bool> PossuiAlgumEspacoAsync(CancellationToken ct = default);
     Task<EspacoTrabalho> CriarEspacoTrabalhoAsync(string nome, string slug, Guid? espacoTrabalhoId = null, CancellationToken ct = default);
+    Task<EspacoTrabalho?> AtualizarEspacoTrabalhoAsync(Guid espacoTrabalhoId, string nome, CancellationToken ct = default);
     Task<List<EspacoTrabalho>> ListarTodosEspacosAsync(CancellationToken ct = default);
     Task<Projeto> CriarProjetoAsync(Guid espacoTrabalhoId, string nome, string slug, Guid? projetoId = null, CancellationToken ct = default);
     Task<bool> ProjetoPossuiHistoricoAsync(Guid espacoTrabalhoId, Guid projetoId, CancellationToken ct = default);

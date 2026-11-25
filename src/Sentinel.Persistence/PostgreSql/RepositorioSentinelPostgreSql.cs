@@ -296,6 +296,17 @@ public sealed class RepositorioSentinelPostgreSql :
         }
     }
 
+    public async Task<EspacoTrabalho?> AtualizarEspacoTrabalhoAsync(Guid espacoTrabalhoId, string nome, CancellationToken ct = default)
+    {
+        await using var cmd = _fonte.CreateCommand(
+            @"UPDATE workspaces SET name = @name
+              WHERE workspace_id = @id
+              RETURNING workspace_id, name, slug, created_at");
+        cmd.Parameters.AddWithValue("id", espacoTrabalhoId);
+        cmd.Parameters.AddWithValue("name", nome);
+        return await LerPrimeiroAsync(cmd, r => new EspacoTrabalho(r.GetGuid(0), r.GetString(1), r.GetString(2), Instante(r, 3)), ct);
+    }
+
     public async Task<List<EspacoTrabalho>> ListarTodosEspacosAsync(CancellationToken ct = default)
     {
         await using var cmd = _fonte.CreateCommand("SELECT workspace_id, name, slug, created_at FROM workspaces ORDER BY created_at, workspace_id");

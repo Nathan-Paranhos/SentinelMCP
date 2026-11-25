@@ -109,6 +109,34 @@ export function criarProjetoAdmin(workspaceId, nome, slug, csrf) {
     return enviarJson('POST', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/projects`, { name: nome, slug }, csrf);
 }
 
+export function atualizarWorkspaceAdmin(workspaceId, nome, csrf) {
+    return enviarJson('PUT', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}`, { name: nome }, csrf);
+}
+
+export async function criarWorkspaceAdmin(nome, slug, adminKey, ownerSubject, ownerIssuer) {
+    const resposta = await fetch('/api/admin/workspaces', {
+        method: 'POST',
+        credentials: 'same-origin',
+        cache: 'no-store',
+        headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+            'X-Admin-Key': adminKey
+        },
+        body: JSON.stringify({
+            name: nome,
+            slug,
+            ownerSubject,
+            ownerIssuer,
+            ownerRole: 'Maintainer'
+        })
+    });
+    if (resposta.ok) {
+        return { status: resposta.status, ok: true, corpo: await resposta.json(), erro: null };
+    }
+    return { status: resposta.status, ok: false, corpo: null, erro: await lerErro(resposta) };
+}
+
 export function removerProjetoAdmin(workspaceId, projectId, csrf) {
     return enviarJson('DELETE', `/api/admin/workspaces/${encodeURIComponent(workspaceId)}/projects/${encodeURIComponent(projectId)}`, undefined, csrf);
 }

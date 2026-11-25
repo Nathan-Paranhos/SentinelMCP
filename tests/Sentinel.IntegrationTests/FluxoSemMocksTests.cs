@@ -85,6 +85,15 @@ public sealed class FluxoSemMocksTests : IDisposable
 
         var loginHtml = await http.GetStringAsync("/auth/login");
         Assert.Contains("data-toggle-password=\"login-password\"", loginHtml);
+
+        // Credenciais Bearer não são aceitas nas páginas HTML de setup/login (retornam 403, nunca 500)
+        var reqLoginBearer = new HttpRequestMessage(HttpMethod.Get, "/auth/login");
+        reqLoginBearer.Headers.Add("Authorization", "Bearer qualquertoken");
+        Assert.Equal(HttpStatusCode.Forbidden, (await http.SendAsync(reqLoginBearer)).StatusCode);
+
+        var reqSetupBearer = new HttpRequestMessage(HttpMethod.Get, "/auth/setup");
+        reqSetupBearer.Headers.Add("Authorization", "Bearer qualquertoken");
+        Assert.Equal(HttpStatusCode.Forbidden, (await http.SendAsync(reqSetupBearer)).StatusCode);
         var csrfLogin = WebUtility.HtmlDecode(Regex.Match(loginHtml, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value);
         var loginPost = await http.PostAsync("/auth/login", new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -166,5 +175,118 @@ public sealed class FluxoSemMocksTests : IDisposable
 
         var recibo = await http.GetFromJsonAsync<JsonElement>($"/api/review/receipt?workspaceId={wsId}&projectId={projId}&queryId={queryId}");
         Assert.True(recibo.GetProperty("integrityVerified").GetBoolean());
+    }
+
+    [Fact]
+    public async Task PersistenciaLocal_MantemWorkspaceProjetosEChavesAposReinicio_ESessaoObsoletaRedireciona()
+    {
+        var arquivoTemp = Path.Combine(Path.GetTempPath(), $"sentinel-persist-{Guid.NewGuid():N}.json");
+        try
+        {
+            Guid wsId;
+            string tokenApi;
+
+            using (var fabrica1 = new FabricaSentinel(new Dictionary<string, string?>
+            {
+                ["Sentinel:StorageProvider"] = "InMemory",
+                ["Sentinel:LocalDataFile"] = arquivoTemp,
+                ["Sentinel:SeedDemoData"] = "false",
+                ["Sentinel:AllowMockTokens"] = "false",
+                ["Sentinel:Web:EnableDevLogin"] = "false"
+            }))
+            {
+                var http1 = fabrica1.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, HandleCookies = true });
+                var setupHtml = await http1.GetStringAsync("/auth/setup?returnUrl=%2Freview");
+                var csrfSetup = WebUtility.HtmlDecode(Regex.Match(setupHtml, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value);
+
+                var setupPost = await http1.PostAsync("/auth/setup", new FormUrlEncodedContent(new Dictionary<string, string>
+                {
+                    ["workspaceName"] = "Org Persistida",
+                    ["workspaceSlug"] = "org-persistida",
+                    ["projectName"] = "API Principal",
+                    ["projectSlug"] = "api-principal",
+                    ["username"] = "nathan.adm",
+                    ["displayName"] = "Nathan",
+                    ["password"] = "SenhaSegura#2026",
+                    ["confirmPassword"] = "SenhaSegura#2026",
+                    ["__RequestVerificationToken"] = csrfSetup,
+                    ["returnUrl"] = "/review"
+                }));
+                Assert.Equal(HttpStatusCode.Redirect, setupPost.StatusCode);
+
+                var state1 = await http1.GetFromJsonAsync<JsonElement>("/api/review/state");
+                wsId = state1.GetProperty("workspace").GetProperty("id").GetGuid();
+                var csrf1 = state1.GetProperty("csrf").GetProperty("token").GetString()!;
+
+                // Renomeia/salva workspace via PUT /api/admin/workspaces/{id}
+                var putReq = new HttpRequestMessage(HttpMethod.Put, $"/api/admin/workspaces/{wsId}")
+                {
+                    Content = JsonContent.Create(new { name = "Org Persistida Atualizada" })
+                };
+                putReq.Headers.Add("X-CSRF-Token", csrf1);
+                (await http1.SendAsync(putReq)).EnsureSuccessStatusCode();
+
+                var keyReq = new HttpRequestMessage(HttpMethod.Post, $"/api/admin/workspaces/{wsId}/api-keys")
+                {
+                    Content = JsonContent.Create(new { name = "Codex Persistido", subject = "codex-p", clientId = "codex", role = "Contributor" })
+                };
+                keyReq.Headers.Add("X-CSRF-Token", csrf1);
+                var keyResp = await http1.SendAsync(keyReq);
+                Assert.Equal(HttpStatusCode.Created, keyResp.StatusCode);
+                tokenApi = (await keyResp.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("token").GetString()!;
+            }
+
+            // Nova instância carregando o mesmo arquivo JSON após reinício
+            using var fabrica2 = new FabricaSentinel(new Dictionary<string, string?>
+            {
+                ["Sentinel:StorageProvider"] = "InMemory",
+                ["Sentinel:LocalDataFile"] = arquivoTemp,
+                ["Sentinel:SeedDemoData"] = "false",
+                ["Sentinel:AllowMockTokens"] = "false",
+                ["Sentinel:Web:EnableDevLogin"] = "false"
+            });
+
+            var mcp2 = new ClienteMcp(fabrica2.CreateClient());
+            var descoberta = (await mcp2.ToolAsync("list_workspaces", new { }, tokenApi)).Sucesso();
+            var wsRetornado = descoberta.GetProperty("workspaces")[0];
+            Assert.Equal(wsId, wsRetornado.GetProperty("workspaceId").GetGuid());
+            Assert.Equal("Org Persistida Atualizada", wsRetornado.GetProperty("name").GetString());
+
+            // Novo login web com usuário e senha preservados
+            var http2 = fabrica2.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, HandleCookies = true });
+            var loginHtml = await http2.GetStringAsync("/auth/login");
+            var csrfLogin = WebUtility.HtmlDecode(Regex.Match(loginHtml, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value);
+            var loginPost = await http2.PostAsync("/auth/login", new FormUrlEncodedContent(new Dictionary<string, string>
+            {
+                ["username"] = "nathan.adm",
+                ["password"] = "SenhaSegura#2026",
+                ["__RequestVerificationToken"] = csrfLogin,
+                ["returnUrl"] = "/review"
+            }));
+            Assert.Equal(HttpStatusCode.Redirect, loginPost.StatusCode);
+            var reviewResp = await http2.GetAsync("/review");
+            Assert.Equal(HttpStatusCode.OK, reviewResp.StatusCode);
+
+            // Se o arquivo local for reiniciado enquanto o navegador ainda guarda cookie antigo, /review limpa a sessão e redireciona para /auth/setup
+            using var fabricaLimpa = new FabricaSentinel(new Dictionary<string, string?>
+            {
+                ["Sentinel:StorageProvider"] = "InMemory",
+                ["Sentinel:SeedDemoData"] = "false",
+                ["Sentinel:AllowMockTokens"] = "false",
+                ["Sentinel:Web:EnableDevLogin"] = "false"
+            });
+            var httpLimpo = fabricaLimpa.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false, HandleCookies = false });
+            var reqCookieAntigo = new HttpRequestMessage(HttpMethod.Get, "/review");
+            foreach (var c in loginPost.Headers.GetValues("Set-Cookie"))
+                reqCookieAntigo.Headers.Add("Cookie", c.Split(';', 2)[0]);
+            var respObsoleto = await httpLimpo.SendAsync(reqCookieAntigo);
+            Assert.Equal(HttpStatusCode.Redirect, respObsoleto.StatusCode);
+            Assert.Contains("/auth/setup", respObsoleto.Headers.Location!.ToString());
+        }
+        finally
+        {
+            if (File.Exists(arquivoTemp)) File.Delete(arquivoTemp);
+            if (File.Exists(arquivoTemp + ".tmp")) File.Delete(arquivoTemp + ".tmp");
+        }
     }
 }

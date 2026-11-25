@@ -92,6 +92,8 @@ public sealed class RepositorioSentinelEmMemoria :
         }
     }
 
+    private static readonly JsonSerializerOptions OpcoesPersistenciaJson = new() { WriteIndented = true };
+
     private void PersistirSemTrava()
     {
         if (_arquivoEstado == null)
@@ -117,7 +119,7 @@ public sealed class RepositorioSentinelEmMemoria :
         };
 
         var tmp = _arquivoEstado + ".tmp";
-        File.WriteAllText(tmp, JsonSerializer.Serialize(snap));
+        File.WriteAllText(tmp, JsonSerializer.Serialize(snap, OpcoesPersistenciaJson));
         File.Move(tmp, _arquivoEstado, overwrite: true);
     }
 
@@ -254,6 +256,8 @@ public sealed class RepositorioSentinelEmMemoria :
                 _recibosConsulta.Remove(chave);
                 removidos++;
             }
+            if (removidos > 0)
+                PersistirSemTrava();
             return Task.FromResult(removidos);
         }
     }
@@ -316,6 +320,20 @@ public sealed class RepositorioSentinelEmMemoria :
             _espacosTrabalho[ws.EspacoTrabalhoId] = ws;
             PersistirSemTrava();
             return Task.FromResult(ws);
+        }
+    }
+
+    public Task<EspacoTrabalho?> AtualizarEspacoTrabalhoAsync(Guid espacoTrabalhoId, string nome, CancellationToken ct = default)
+    {
+        lock (_trava)
+        {
+            if (!_espacosTrabalho.TryGetValue(espacoTrabalhoId, out var existente))
+                return Task.FromResult<EspacoTrabalho?>(null);
+
+            var atualizado = existente with { Nome = nome };
+            _espacosTrabalho[espacoTrabalhoId] = atualizado;
+            PersistirSemTrava();
+            return Task.FromResult<EspacoTrabalho?>(atualizado);
         }
     }
 

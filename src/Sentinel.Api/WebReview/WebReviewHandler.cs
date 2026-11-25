@@ -64,28 +64,49 @@ public sealed class WebReviewHandler
         return new Ator(emissor, sujeito, "web-session", CanalDeAcesso.Web);
     }
 
+    private static async Task<(bool Permitido, Ator? Ator)> TentarObterAtorWebAsync(HttpContext contexto)
+    {
+        try
+        {
+            return (true, await ObterAtorAsync(contexto));
+        }
+        catch (ExcecaoDeAcessoNegado ex)
+        {
+            contexto.Response.StatusCode = StatusCodes.Status403Forbidden;
+            await contexto.Response.WriteAsync(ex.Message);
+            return (false, null);
+        }
+    }
+
     private static string? UrlLocal(string? url) =>
         !string.IsNullOrEmpty(url) && url.StartsWith('/') && !url.StartsWith("//") && !url.StartsWith("/\\") ? url : null;
 
     // Renderização de páginas HTML
     public async Task RenderReviewPageAsync(HttpContext contexto)
     {
-        Ator? ator;
-        try
-        {
-            ator = await ObterAtorAsync(contexto);
-        }
-        catch (ExcecaoDeAcessoNegado ex)
-        {
-            contexto.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await contexto.Response.WriteAsync(ex.Message);
+        var (permitido, ator) = await TentarObterAtorWebAsync(contexto);
+        if (!permitido)
             return;
-        }
 
         if (ator == null)
         {
             var retorno = contexto.Request.Path + contexto.Request.QueryString;
             contexto.Response.Redirect("/auth/login?returnUrl=" + Uri.EscapeDataString(retorno));
+            return;
+        }
+
+        // Descarta cookie obsoleto caso os dados locais/banco tenham sido reiniciados ou o vínculo removido
+        var espacosAtivos = await _servico.ObterEspacosEProjetosDaIdentidadeAsync(ator, contexto.RequestAborted);
+        if (espacosAtivos.Count == 0)
+        {
+            await contexto.SignOutAsync(EsquemasDeAutenticacao.CookieWeb);
+            var retorno = contexto.Request.Path + contexto.Request.QueryString;
+            if (!OidcConfigurado(_config) && await _servico.ConfiguracaoInicialPendenteAsync(contexto.RequestAborted))
+            {
+                contexto.Response.Redirect("/auth/setup?returnUrl=" + Uri.EscapeDataString(retorno));
+                return;
+            }
+            contexto.Response.Redirect("/auth/login?erro=sem_vinculo&returnUrl=" + Uri.EscapeDataString(retorno));
             return;
         }
 
@@ -140,9 +161,13 @@ public sealed class WebReviewHandler
             return;
         }
 
-        var erroMsg = contexto.Request.Query["erro"].ToString() == "1"
-            ? "Usuário ou senha inválidos."
-            : null;
+        var erroCodigo = contexto.Request.Query["erro"].ToString();
+        var erroMsg = erroCodigo switch
+        {
+            "1" => "Usuário ou senha inválidos.",
+            "sem_vinculo" => "Sua sessão não possui vínculo ativo com nenhum workspace neste ambiente. Entre novamente.",
+            _ => null
+        };
         await RenderFormularioLoginLocalAsync(contexto, retorno, erroMsg);
     }
 
@@ -151,11 +176,22 @@ public sealed class WebReviewHandler
 
     private async Task RenderFormularioLoginLocalAsync(HttpContext contexto, string retorno, string? erro)
     {
+        var (permitido, atorAtual) = await TentarObterAtorWebAsync(contexto);
+        if (!permitido)
+            return;
+
         var tokens = _antiforgery.GetAndStoreTokens(contexto);
         var enc = HtmlEncoder.Default;
         var blocoErro = string.IsNullOrWhiteSpace(erro)
             ? string.Empty
             : $@"<div class=""review-permission-notice"" role=""alert"">{enc.Encode(erro)}</div>";
+
+        var espacosAtivos = atorAtual != null
+            ? await _servico.ObterEspacosEProjetosDaIdentidadeAsync(atorAtual, contexto.RequestAborted)
+            : [];
+        var blocoSessaoAtiva = espacosAtivos.Count > 0
+            ? $@"<div class=""callout-guide"" style=""margin-bottom:0;""><span>Sessão ativa como <strong>{enc.Encode(atorAtual!.Sujeito)}</strong> ({espacosAtivos.Count} workspace(s)).</span><a href=""{enc.Encode(retorno)}"" class=""btn-macos btn-macos-secondary btn-macos-sm"">Ir para Console</a></div>"
+            : string.Empty;
 
         contexto.Response.ContentType = "text/html; charset=utf-8";
         contexto.Response.Headers.CacheControl = "no-store";
@@ -173,7 +209,8 @@ public sealed class WebReviewHandler
 <form method=""post"" action=""/auth/login"" class=""auth-card"">
   <div class=""auth-brand""><img src=""/sentinel-verde.svg"" alt=""Sentinel""><span>Sentinel-MCP</span></div>
   <h1 class=""auth-title"">Entrar no Console de Governança</h1>
-  <p class=""auth-desc"">Autentique-se com sua conta cadastrada para revisar propostas, decisões, incidentes e chaves MCP.</p>
+  <p class=""auth-desc"">Informe o <strong>usuário</strong> cadastrado na configuração inicial ou em Administração (não o nome de exibição) e sua senha.</p>
+  {blocoSessaoAtiva}
   {blocoErro}
   <label class=""form-field""><span>Usuário</span><input class=""form-input"" name=""username"" required maxlength=""80"" autocomplete=""username"" placeholder=""seu.usuario""></label>
   <label class=""form-field"" for=""login-password""><span>Senha</span><div class=""password-input-wrap""><input id=""login-password"" class=""form-input"" name=""password"" type=""password"" required maxlength=""128"" autocomplete=""current-password"">{BotaoOlhoSenha("login-password")}</div></label>
@@ -227,13 +264,22 @@ public sealed class WebReviewHandler
 
     public async Task RenderSetupAsync(HttpContext contexto)
     {
+        var (permitido, ator) = await TentarObterAtorWebAsync(contexto);
+        if (!permitido)
+            return;
+
+        var retorno = UrlLocal(contexto.Request.Query["returnUrl"]) ?? "/review";
         if (OidcConfigurado(_config) || !await _servico.ConfiguracaoInicialPendenteAsync(contexto.RequestAborted))
         {
-            contexto.Response.Redirect("/auth/login");
+            if (ator != null && (await _servico.ObterEspacosEProjetosDaIdentidadeAsync(ator, contexto.RequestAborted)).Count > 0)
+            {
+                contexto.Response.Redirect(retorno);
+                return;
+            }
+            contexto.Response.Redirect("/auth/login?returnUrl=" + Uri.EscapeDataString(retorno));
             return;
         }
 
-        var retorno = UrlLocal(contexto.Request.Query["returnUrl"]) ?? "/review";
         await RenderFormularioSetupAsync(contexto, retorno, null);
     }
 
@@ -423,11 +469,20 @@ public sealed class WebReviewHandler
         object Espaco(EspacoTrabalho e) => new { id = e.EspacoTrabalhoId, nome = e.Nome, slug = e.IdentificadorSlug };
         object Evidencias(IEnumerable<Evidencia> ev) => ev.Select(e => new { tipo = e.Tipo, rotulo = e.Rotulo, url = e.Url }).ToList();
 
+        var provedorArmazenamento = _config["Sentinel:StorageProvider"] ?? "InMemory";
+        var arquivoLocal = _config["Sentinel:LocalDataFile"];
+        var resumoPersistencia = string.Equals(provedorArmazenamento, "PostgreSQL", StringComparison.OrdinalIgnoreCase)
+            ? "PostgreSQL com RLS forçada"
+            : (!string.IsNullOrWhiteSpace(arquivoLocal)
+                ? $"Arquivo local persistido ({arquivoLocal})"
+                : "Em memória (sem arquivo persistido)");
+
         return new
         {
             sistema = new
             {
-                armazenamento = _config["Sentinel:StorageProvider"] ?? "InMemory",
+                armazenamento = provedorArmazenamento,
+                persistenciaLocal = resumoPersistencia,
                 autenticacaoWeb = OidcConfigurado(_config) ? "OIDC PKCE" : (LoginDevPermitido(_config, _ambiente) ? "Dev" : "Local PBKDF2"),
                 tokensMockPermitidos = ServicoIdentidadeAgente.MockPermitido(_config, _ambiente),
                 ambiente = _ambiente.EnvironmentName

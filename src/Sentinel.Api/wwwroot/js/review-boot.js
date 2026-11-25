@@ -19,6 +19,9 @@ function mostrarFalhaCarregamento(mensagem) {
         texto.style.cssText = 'margin:0 0 1rem;font-size:0.86rem;color:var(--text-secondary);line-height:1.5;';
         texto.textContent = mensagem;
 
+        const acoes = document.createElement('div');
+        acoes.style.cssText = 'display:flex;gap:8px;justify-content:center;flex-wrap:wrap;';
+
         const botao = document.createElement('button');
         botao.type = 'button';
         botao.className = 'btn-macos btn-macos-secondary';
@@ -28,7 +31,14 @@ function mostrarFalhaCarregamento(mensagem) {
             iniciar();
         });
 
-        interno.append(titulo, texto, botao);
+        const btnLogin = document.createElement('button');
+        btnLogin.type = 'button';
+        btnLogin.className = 'btn-macos btn-macos-primary';
+        btnLogin.textContent = 'Ir para Login / Setup';
+        btnLogin.addEventListener('click', () => redirecionarParaLogin());
+
+        acoes.append(btnLogin, botao);
+        interno.append(titulo, texto, acoes);
         caixa.appendChild(interno);
         corpo.replaceChildren(caixa);
     }

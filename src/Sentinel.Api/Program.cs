@@ -24,12 +24,10 @@ var ehStdio = args.Contains("--stdio");
 
 if (ehStdio)
 {
-    // Reaproveita ASPNETCORE_ENVIRONMENT e garante ContentRoot válido mesmo quando iniciado de outro diretório
+    // Reaproveita ASPNETCORE_ENVIRONMENT e compartilha o mesmo ContentRoot da API (data/sentinel-local.json)
     var envStdio = Environment.GetEnvironmentVariable("DOTNET_ENVIRONMENT")
         ?? Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
-    var raizStdio = File.Exists(Path.Combine(Directory.GetCurrentDirectory(), "appsettings.json"))
-        ? Directory.GetCurrentDirectory()
-        : AppContext.BaseDirectory;
+    var raizStdio = ResolverDiretorioApi(Directory.GetCurrentDirectory());
     var hostBuilder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
     {
         Args = args,
@@ -311,6 +309,7 @@ app.MapMcp("/mcp/sse").RequireRateLimiting("mcp");
 app.MapGet("/api/admin/workspaces", (HttpContext ctx, AdminEndpointHandler h) => h.HandleListWorkspacesAsync(ctx)).RequireRateLimiting("web");
 app.MapPost("/api/admin/workspaces", (HttpContext ctx, AdminEndpointHandler h) => h.HandleCreateWorkspaceAsync(ctx)).RequireRateLimiting("web");
 app.MapGet("/api/admin/workspaces/{workspaceId:guid}", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleGetWorkspaceAsync(ctx, workspaceId)).RequireRateLimiting("web");
+app.MapPut("/api/admin/workspaces/{workspaceId:guid}", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleUpdateWorkspaceAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapGet("/api/admin/workspaces/{workspaceId:guid}/projects", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleListProjectsAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapPost("/api/admin/workspaces/{workspaceId:guid}/projects", (HttpContext ctx, Guid workspaceId, AdminEndpointHandler h) => h.HandleCreateProjectAsync(ctx, workspaceId)).RequireRateLimiting("web");
 app.MapDelete("/api/admin/workspaces/{workspaceId:guid}/projects/{projectId:guid}", (HttpContext ctx, Guid workspaceId, Guid projectId, AdminEndpointHandler h) => h.HandleDeleteProjectAsync(ctx, workspaceId, projectId)).RequireRateLimiting("web");
@@ -364,7 +363,12 @@ static string RegistrarPersistencia(IServiceCollection services, IConfiguration 
 
         var arquivoLocal = config["Sentinel:LocalDataFile"];
         if (!string.IsNullOrWhiteSpace(arquivoLocal) && !Path.IsPathRooted(arquivoLocal))
-            arquivoLocal = Path.Combine(ambiente.ContentRootPath, arquivoLocal);
+        {
+            var baseDir = ambiente.IsEnvironment("Testing")
+                ? ambiente.ContentRootPath
+                : ResolverDiretorioApi(ambiente.ContentRootPath);
+            arquivoLocal = Path.Combine(baseDir, arquivoLocal);
+        }
 
         var repositorio = new RepositorioSentinelEmMemoria(arquivoLocal);
         if (args.Contains("--seed-demo") || config.GetValue<bool>("Sentinel:SeedDemoData"))
@@ -374,6 +378,22 @@ static string RegistrarPersistencia(IServiceCollection services, IConfiguration 
     }
 
     return provedor;
+}
+
+static string ResolverDiretorioApi(string diretorioAtual)
+{
+    if (File.Exists(Path.Combine(diretorioAtual, "Sentinel.Api.csproj"))
+        || File.Exists(Path.Combine(diretorioAtual, "appsettings.json")))
+        return diretorioAtual;
+
+    var dir = new DirectoryInfo(AppContext.BaseDirectory);
+    for (var i = 0; i < 5 && dir != null; i++, dir = dir.Parent)
+    {
+        if (File.Exists(Path.Combine(dir.FullName, "Sentinel.Api.csproj")))
+            return dir.FullName;
+    }
+
+    return AppContext.BaseDirectory;
 }
 
 static void RegistrarInterfaces<T>(IServiceCollection servicos, T repositorio) where T : class,
