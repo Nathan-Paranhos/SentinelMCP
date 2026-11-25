@@ -13,7 +13,7 @@
     left: 0;
     width: 100vw;
     height: 100vh;
-    background: radial-gradient(circle at 50% 40%, #0d1e17 0%, #060e0a 85%);
+    background: var(--hero-loader-bg);
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -104,13 +104,13 @@
 .loading-title {
     font-size: 1rem;
     font-weight: 700;
-    color: #E5EFE5;
+    color: var(--code-fg);
     letter-spacing: -0.015em;
 }
 
 .loading-subtitle {
     font-size: 0.8rem;
-    color: #97AA9D;
+    color: var(--code-fg-muted);
 }
 
 .progress-track-linear {
@@ -125,7 +125,7 @@
 .progress-fill-linear {
     width: 0%;
     height: 100%;
-    background: linear-gradient(90deg, #235347, #8EB69B, #C8F578);
+    background: var(--brand-gradient);
     border-radius: var(--radius-pill);
     transition: width 0.65s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -140,7 +140,7 @@
 }
 
 .landing-nav-inner {
-    background: rgba(19, 28, 24, 0.88);
+    background: var(--nav-glass-bg);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
     border: 1px solid var(--border-subtle);
@@ -152,10 +152,6 @@
     align-items: center;
     gap: 10px;
     min-width: 0;
-}
-
-[data-theme="light"] .landing-nav-inner {
-    background: rgba(250, 253, 249, 0.9);
 }
 
 .landing-brand {
@@ -687,8 +683,8 @@
 }
 
 .landing-code-wrap {
-    background: #090e0b;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: var(--code-surface);
+    border: 1px solid var(--code-surface-border);
     border-radius: var(--radius-md);
     overflow: hidden;
 }
@@ -700,17 +696,17 @@
     flex-wrap: wrap;
     gap: 8px;
     padding: 8px 14px;
-    background: rgba(255, 255, 255, 0.04);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--code-header-bg);
+    border-bottom: 1px solid var(--code-surface-border);
     font-family: var(--font-mono);
     font-size: 0.74rem;
-    color: #97AA9D;
+    color: var(--code-fg-muted);
 }
 
 .landing-copy-btn {
     background: rgba(142, 182, 155, 0.16);
     border: 1px solid rgba(142, 182, 155, 0.35);
-    color: #DAF1DE;
+    color: var(--code-fg);
     padding: 4px 10px;
     border-radius: var(--radius-xs);
     font-family: inherit;
@@ -731,7 +727,7 @@
     font-family: var(--font-mono);
     font-size: 0.82rem;
     line-height: 1.6;
-    color: #DAF1DE;
+    color: var(--code-fg);
     overflow-x: auto;
     white-space: pre;
 }

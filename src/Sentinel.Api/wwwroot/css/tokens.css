@@ -9,12 +9,22 @@
 
     --status-danger: #E05252;
     --status-danger-bg: rgba(224, 82, 82, 0.12);
+    --status-danger-hover-bg: rgba(224, 82, 82, 0.22);
+    --status-danger-border: rgba(224, 82, 82, 0.3);
     --status-warning: #D9822B;
     --status-warning-bg: rgba(217, 130, 43, 0.12);
     --status-success: #235347;
     --status-success-bg: rgba(35, 83, 71, 0.12);
     --status-info: #3B82F6;
     --status-info-bg: rgba(59, 130, 246, 0.12);
+
+    --code-surface: #0B120E;
+    --code-surface-border: rgba(255, 255, 255, 0.09);
+    --code-header-bg: rgba(255, 255, 255, 0.04);
+    --code-fg: #DAF1DE;
+    --code-fg-muted: #9DB0A3;
+    --brand-gradient: linear-gradient(90deg, var(--brand-interaction), var(--brand-sage), var(--brand-lime));
+    --hero-loader-bg: radial-gradient(circle at 50% 40%, #0d1e17 0%, #060e0a 85%);
 
     --radius-xs: 6px;
     --radius-sm: 8px;
@@ -61,6 +71,8 @@
     --shadow-card: 0 1px 2px rgba(11, 43, 38, 0.05);
     --sidebar-border: rgba(22, 45, 37, 0.09);
     --code-bg: rgba(22, 45, 37, 0.06);
+    --nav-glass-bg: rgba(250, 253, 249, 0.9);
+    --backdrop-scrim: rgba(11, 43, 38, 0.28);
 }
 
 [data-theme="dark"] {
@@ -91,6 +103,8 @@
     --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.25);
     --sidebar-border: rgba(229, 239, 229, 0.08);
     --code-bg: rgba(229, 239, 229, 0.07);
+    --nav-glass-bg: rgba(19, 28, 24, 0.88);
+    --backdrop-scrim: rgba(5, 14, 10, 0.58);
     --status-success: #8EB69B;
     --status-success-bg: rgba(142, 182, 155, 0.14);
     --status-info: #60A5FA;

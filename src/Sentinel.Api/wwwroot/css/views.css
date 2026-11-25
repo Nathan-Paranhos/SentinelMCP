@@ -279,7 +279,7 @@
 }
 
 .code-panel {
-    background: #0B120E;
+    background: var(--code-surface);
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-md);
     overflow: hidden;
@@ -295,11 +295,11 @@
     flex-wrap: wrap;
     gap: 8px;
     padding: 8px 14px;
-    background: rgba(255, 255, 255, 0.04);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--code-header-bg);
+    border-bottom: 1px solid var(--code-surface-border);
     font-family: var(--font-mono);
     font-size: 0.74rem;
-    color: #9DB0A3;
+    color: var(--code-fg-muted);
     overflow-wrap: anywhere;
 }
 
@@ -312,7 +312,7 @@
     font-family: var(--font-mono);
     font-size: 0.8rem;
     line-height: 1.55;
-    color: #DAF1DE;
+    color: var(--code-fg);
     white-space: pre;
 }
 

@@ -19,8 +19,9 @@
 
 ## Sumário
 
-- [Visão geral](#visão-geral)
+- [Visão geral e dois modos de uso (Open Source)](#visão-geral-e-dois-modos-de-uso-open-source)
 - [Arquitetura](#arquitetura)
+- [Design System & Interface (`/review`)](#design-system--interface-review)
 - [Tools, Resources e Prompts MCP](#tools-resources-e-prompts-mcp)
 - [Conectando clientes MCP](#conectando-clientes-mcp)
 - [Execução local](#execução-local)
@@ -31,40 +32,52 @@
 - [Critérios de aceite (AC-01 a AC-08)](#critérios-de-aceite-ac-01-a-ac-08)
 - [Estrutura da solução](#estrutura-da-solução)
 - [Limitações conhecidas e pendências](#limitações-conhecidas-e-pendências)
-- [Documentação complementar](#documentação-complementar)
+- [Documentação e comunidade](#documentação-e-comunidade)
 - [Licença](#licença)
 
 ---
 
-## Visão geral
+## Visão geral e dois modos de uso (Open Source)
 
-O **Sentinel-MCP** é um servidor MCP (*Model Context Protocol*) em C#/.NET 9 que dá a agentes de desenvolvimento (**OpenAI Codex**, **Claude Code**, **Cursor**, **Gemini CLI**, **VS Code Copilot** e outros clientes MCP) acesso às decisões arquiteturais vigentes e aos incidentes registrados de uma organização.
+O **Sentinel-MCP** é um servidor MCP (*Model Context Protocol*) open source (MIT) em C#/.NET 9 que dá a agentes de desenvolvimento (**OpenAI Codex**, **Claude Code**, **Cursor**, **Gemini CLI**, **VS Code Copilot** e outros clientes MCP) acesso às decisões arquiteturais vigentes e aos incidentes registrados — **cada pessoa pode rodar localmente na própria máquina ou hospedar em produção dentro da organização**.
 
-Problemas que ele ataca:
+| Perfil de Adoção | Como funciona | Persistência & Autenticação |
+| --- | --- | --- |
+| **Individual / Time Local** | Clone o repositório e execute `dotnet run --project src/Sentinel.Api` (`ASPNETCORE_ENVIRONMENT=Development`). Sobe em segundos sem Docker ou banco externo. | Persistência atômica local em `src/Sentinel.Api/data/sentinel-local.json` + contas locais PBKDF2-SHA256 via `/auth/setup` + chaves `snt_...` (zero mocks). |
+| **Organização / Produção Self-Hosted** | Suba com Docker Compose (`compose.yaml`) ou Kubernetes atrás de um proxy reverso HTTPS (`UseForwardedHeaders`). | PostgreSQL 16+/17 com `FORCE ROW LEVEL SECURITY` e triggers `append-only` + chaves DataProtection persistidas + `ADMIN_API_KEY` + OIDC/JWT opcionais + OpenTelemetry. |
+
+Problemas que ele resolve:
 
 1. **Propostas recicladas**: um agente sugere uma abordagem que a equipe já avaliou e descartou.
 2. **Incidentes sem histórico**: um agente analisa uma falha sem ver o RCA e a mitigação de um caso anterior.
 3. **Conhecimento fragmentado**: decisões ficam espalhadas em PRs, chats e ADRs sem indicação de vigência.
 
-Ciclo de governança:
+Ciclo de governança ponta a ponta (**Agente Propõe → Pessoa Decide → Auditoria SHA-256**):
 
-```
-┌─────────────────┐       propose_decision       ┌─────────────────────┐
-│  Agente de IA   │ ───────────────────────────> │  Sentinel (MCP)     │
-│  (cliente MCP)  │                              │  proposta pendente  │
-└─────────────────┘                              └──────────┬──────────┘
-                                                            │
-                                                            ▼
-┌─────────────────┐   aprovação / rejeição       ┌─────────────────────┐
-│   Mantenedor    │ ───────────────────────────> │  /review            │
-│   (pessoa)      │   sessão web + CSRF          │  (papel Maintainer) │
-└─────────────────┘                              └──────────┬──────────┘
-                                                            │
-                                                            ▼
-┌─────────────────┐        query_context         ┌─────────────────────┐
-│  Outro agente   │ <─────────────────────────── │ Decisão vigente     │
-│                 │  + comprovante (digest)      │ + incidentes        │
-└─────────────────┘                              └─────────────────────┘
+```mermaid
+sequenceDiagram
+    autonumber
+    actor IA1 as Agente de IA (Codex / Claude / Cursor)
+    participant MCP as Endpoint MCP (/mcp ou --stdio)
+    participant Core as ServicoDeMemoria + Redutores
+    participant DB as Persistencia (JSON Local ou PostgreSQL RLS)
+    actor Humano as Mantenedor (Navegador /review)
+
+    IA1->>MCP: tools/call list_workspaces e query_context (Bearer snt_... ou JWT)
+    MCP->>Core: Valida escopo read:memory e vinculo ativo
+    Core->>DB: Busca decisoes vigentes e grava comprovante SHA-256
+    DB-->>IA1: Itens relevantes + queryId + digest SHA-256
+
+    IA1->>MCP: tools/call propose_decision (expectedVersion, idempotencyKey, evidence HTTPS)
+    MCP->>Core: Valida invariantes e trava versao do topico
+    Core->>DB: Grava evento append-only + projecao decision_pending_proposals
+    DB-->>IA1: topicId, proposalId, status="proposed"
+
+    Humano->>Core: POST /api/review/approve (Cookie HttpOnly + X-CSRF-Token + Maintainer)
+    Core->>DB: Grava DecisionApproved + promove decision_current para "active"
+
+    IA1->>MCP: Nova consulta query_context
+    MCP-->>IA1: Decisao consolidada "active" + novo queryId verificavel
 ```
 
 Garantias implementadas:
@@ -85,33 +98,34 @@ Garantias implementadas:
 
 ```mermaid
 flowchart TB
-    subgraph Clientes
-        A1["Clientes MCP (Claude Code, Cursor...)"]
-        H1["Mantenedor (navegador)"]
+    subgraph Clientes["Clientes e Usuarios"]
+        A1["Agentes de IA (Codex, Claude Code, Cursor, Gemini, VS Code)"]
+        H1["Mantenedor Humano (Console Web)"]
     end
 
-    subgraph Api["Sentinel.Api (ASP.NET Core / .NET 9)"]
-        McpEp["POST /mcp (JSON-RPC, sem sessão)"]
-        WebRev["/review + /api/review/* (cookie + CSRF)"]
-        Auth["Credenciais de agente: JWT, chave de API ou mock (dev)"]
+    subgraph Api["Sentinel.Api (.NET 9 / ASP.NET Core)"]
+        Proxy["ForwardedHeaders + Rate Limiter + OTel"]
+        McpEp["MCP Transport (POST /mcp stateless, /mcp/sse e --stdio)"]
+        WebRev["Web & Admin (/auth/setup, /auth/login, /review, /api/admin/*)"]
+        Auth["Seguranca (Chaves snt_ SHA-256, JWT, Cookie HttpOnly + CSRF, PBKDF2 / OIDC)"]
     end
 
-    subgraph Core["Sentinel.Core"]
+    subgraph Core["Sentinel.Core (Dominio Puro)"]
         Servico["CasosDeUso/ServicoDeMemoria"]
-        Valid["Validacao/ValidadorDeInvariantes"]
-        Red["Redutores (decisão e incidente)"]
-        Contr["Contratos (interfaces de repositório)"]
+        Valid["ValidadorDeInvariantes + SegurancaLocal"]
+        Red["RedutorDeDecisao & RedutorDeIncidente"]
+        Contr["Contratos (IRepositorios)"]
     end
 
     subgraph Pers["Sentinel.Persistence"]
-        Mem["EmMemoria (desenvolvimento/testes)"]
-        Pg["PostgreSql (Npgsql, SQL puro, RLS)"]
+        Mem["EmMemoria (Local JSON atomico: data/sentinel-local.json)"]
+        Pg["PostgreSql (Npgsql, SQL puro, FORCE RLS, Triggers append-only)"]
     end
 
-    A1 -->|Authorization: Bearer| McpEp
-    H1 -->|OIDC ou login de desenvolvimento| WebRev
+    A1 -->|"Authorization: Bearer snt_... / JWT"| Proxy --> McpEp
+    H1 -->|"Cookie + X-CSRF-Token (PBKDF2 ou OIDC PKCE)"| Proxy --> WebRev
     McpEp --> Auth --> Servico
-    WebRev --> Servico
+    WebRev --> Auth
     Servico --> Valid
     Servico --> Red
     Servico --> Contr
@@ -119,9 +133,18 @@ flowchart TB
     Contr --> Pg
 ```
 
-- **Uma única camada de casos de uso** (`src/Sentinel.Core/CasosDeUso/ServicoDeMemoria.cs`): validação de entrada (via `ValidadorDeInvariantes`), vínculo e papel no workspace e a regra de que aprovação/rejeição/restauração só aceitam o canal web. O endpoint MCP e a página de revisão apenas autenticam e traduzem.
-- **Contratos de repositório** em `src/Sentinel.Core/Contratos`, com duas implementações: em memória e PostgreSQL.
-- **Armazenamento**: `Sentinel:StorageProvider` = `InMemory` (padrão; não persiste, proibido em Production) ou `PostgreSQL`.
+- **Uma única camada de casos de uso** ([`ServicoDeMemoria.cs`](src/Sentinel.Core/CasosDeUso/ServicoDeMemoria.cs)): validação de entrada (`ValidadorDeInvariantes`), vínculo e papel no workspace, PBKDF2 local, emissão/revogação de chaves `snt_` e a regra de canal web para aprovação/rejeição/restauração.
+- **Contratos de repositório** em [`IRepositorios.cs`](src/Sentinel.Core/Contratos/IRepositorios.cs), com duas implementações simétricas: em memória (com persistência JSON atômica via `Sentinel:LocalDataFile`) e PostgreSQL (Npgsql com SQL parametrizado, RLS e migrador).
+- **Armazenamento**: `Sentinel:StorageProvider` = `InMemory` (usado com `LocalDataFile` em `Development`; bloqueado por padrão em `Production`) ou `PostgreSQL` (padrão em `Production`).
+
+---
+
+## Design System & Interface (`/review`)
+
+O console web adota o Design System **"Botanical Obsidian"** — visual inspirado em interfaces desktop estilo macOS, temas claro/escuro sincronizados antes da renderização, responsividade completa (desktop 3 colunas até mobile 360px) e política **CSP estrita** (`script-src 'self'`, zero scripts inline ou CDNs externas).
+
+- **Tokens & Temas**: [`tokens.css`](src/Sentinel.Api/wwwroot/css/tokens.css) (`--brand-*`, superfícies Light/Dark, estados semânticos `active`/`proposed`/`reported`/`rejected`, raios e motion `cubic-bezier(0.16, 1, 0.3, 1)`).
+- **Especificação completa**: veja o guia de tokens, paleta, breakpoints e catálogo de componentes em **[docs/design/DESIGN_SYSTEM.md](docs/design/DESIGN_SYSTEM.md)** e os detalhes operacionais em [Console de revisão web e Landing](#console-de-revisão-web-e-landing).
 
 ---
 
@@ -155,7 +178,7 @@ Erros de tool voltam com `isError: true` e `structuredContent.code` igual a um d
 
 ### Exemplo: `propose_decision`
 
-IDs do conjunto de demonstração (`--seed-demo` / InMemory em Development): workspace `11111111-1111-1111-1111-111111111111`, projeto `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`.
+IDs do conjunto opcional de demonstração (`--seed-demo`; no `Development` padrão o ambiente inicia vazio via `/auth/setup`): workspace `11111111-1111-1111-1111-111111111111`, projeto `aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa`.
 
 ```json
 {
@@ -537,21 +560,25 @@ Implementados em `tests/Sentinel.IntegrationTests/CriteriosDeAceite.cs`. O resul
 │   ├── Sentinel.ContractTests/
 │   └── Sentinel.IntegrationTests/ # Inclui FluxoSemMocksTests, AdminApiTests e AC-01..AC-08
 ├── db/
-│   ├── migrations/            # 001..004 + 005 local_users, agent_api_keys e ON DELETE RESTRICT em eventos
+│   ├── migrations/            # 001..006: schema, RLS, busca GIN/tsvector, local_users, chaves snt_ e grants
 │   ├── fixtures/              # Dados opcionais de demonstração para --seed-demo / Testcontainers
 │   └── docker/                # Script de criação do papel/login no compose
 ├── docs/
-│   ├── adr/                   # Decisões de arquitetura
-│   ├── design/SDD.md          # Documento de design
-│   ├── guides/                # Guias detalhados de arquitetura e conexão (Codex, Claude, Cursor, Gemini, VS Code)
-│   └── runbooks/              # Deploy, migrações e recuperação
+│   ├── README.md              # Índice central de documentação
+│   ├── adr/                   # Decisões de arquitetura (ADRs 001..006)
+│   ├── design/                # Design System (DESIGN_SYSTEM.md) e SDD (SDD.md)
+│   ├── guides/                # Arquitetura/fluxogramas e conexão com agentes MCP
+│   └── runbooks/              # Deploy, migrações, recuperação e reconstrução
 ├── compose.yaml
 ├── Dockerfile
 ├── .env.example
+├── CONTRIBUTING.md
+├── SECURITY.md
+├── LICENSE
 └── AGENTS.md
 ```
 
-### Página de revisão (`/review`) e Landing (`/`)
+### Console de revisão web e Landing
 
 O console web em `/review` (`src/Sentinel.Api/WebReview/review.html` + `wwwroot/js/`) começa sem dados fictícios pelo onboarding `/auth/setup` e oferece governança humana completa:
 - **Navegação Clara e Controles Retráteis**: barra lateral recolhível/expansível por setas (`«` / `» Menu`), Inspetor em gaveta responsiva com botão `× Fechar`, barra `← Voltar` / `Visão Geral` nos detalhes e visão inicial explicativa do fluxo em 4 etapas.
@@ -583,14 +610,15 @@ Os scripts e folhas de estilo são servidos de `wwwroot/js/` e `wwwroot/css/`, c
 
 ---
 
-## Documentação complementar
+## Documentação e comunidade
 
-- [AGENTS.md](AGENTS.md): comandos para agentes e desenvolvedores.
+- [docs/README.md](docs/README.md): índice completo organizado por perfil (uso local, produção na organização, arquitetura).
+- [docs/design/DESIGN_SYSTEM.md](docs/design/DESIGN_SYSTEM.md): Design System ("Botanical Obsidian"), tokens Light/Dark, breakpoints responsivos e catálogo de UI.
+- [docs/guides/arquitetura-e-fluxos.md](docs/guides/arquitetura-e-fluxos.md): fluxogramas Mermaid de arquitetura, autenticação, ciclo de vida de decisões, idempotência e RLS.
 - [docs/guides/conectando-agentes-mcp.md](docs/guides/conectando-agentes-mcp.md): guia prático para **OpenAI Codex**, Claude Code, Cursor, Gemini CLI e VS Code.
-- [docs/guides/arquitetura-e-fluxos.md](docs/guides/arquitetura-e-fluxos.md): explicação detalhada do que tem no sistema e como cada módulo funciona.
-- [docs/adr](docs/adr): decisões de arquitetura (cada ADR traz uma nota de estado da implementação quando diverge do código).
-- [docs/design/SDD.md](docs/design/SDD.md): documento de design.
-- [docs/runbooks](docs/runbooks): deploy, migrações, recuperação e reconstrução.
+- [docs/runbooks](docs/runbooks): deploy na organização, migrações, recuperação e reconstrução.
+- [docs/adr](docs/adr) e [docs/design/SDD.md](docs/design/SDD.md): decisões de arquitetura e documento de design.
+- [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md) e [AGENTS.md](AGENTS.md): guia de contribuição, política de segurança e comandos de engenharia.
 
 ---
 

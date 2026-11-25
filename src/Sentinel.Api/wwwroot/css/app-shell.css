@@ -103,7 +103,7 @@
     display: none;
     position: absolute;
     inset: 0;
-    background: rgba(5, 14, 10, 0.56);
+    background: var(--backdrop-scrim);
     backdrop-filter: blur(3px);
     z-index: 45;
 }
