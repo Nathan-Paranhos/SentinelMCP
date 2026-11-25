@@ -53,14 +53,19 @@ services:
       Sentinel__SeedDemoData: "false"
       ConnectionStrings__Database: "Host=postgres;Port=5432;Database=sentinel_mcp;Username=sentinel_app_login;Password=${SENTINEL_APP_DB_PASSWORD}"
       ADMIN_API_KEY: ${ADMIN_API_KEY:-}
+      Sentinel__DataProtection__KeysDirectory: /app/keys
+      Sentinel__ReverseProxy__TrustPrivateProxies: "true"
       Authentication__Mcp__Authority: ${Authentication__Mcp__Authority:-}
       Authentication__Mcp__Audience: ${Authentication__Mcp__Audience:-sentinel-mcp}
       Authentication__Web__Authority: ${Authentication__Web__Authority:-}
       Authentication__Web__ClientId: ${Authentication__Web__ClientId:-}
       Authentication__Web__ClientSecret: ${Authentication__Web__ClientSecret:-}
+    volumes:
+      - sentinel_keys:/app/keys
     ports:
       - "127.0.0.1:5000:5000"
     # A imagem aspnet não traz curl/wget; monitore /readyz (verifica o banco) pelo orquestrador.
 
 volumes:
   postgres_data:
+  sentinel_keys:

@@ -30,6 +30,9 @@ ENV ASPNETCORE_ENVIRONMENT=Production
 # Migrações e fixtures SQL já vêm no publish (pasta db/), declaradas como Content no Sentinel.Api.csproj.
 COPY --from=build /app/publish ./
 
+# Diretório persistível para chaves DataProtection sem root privilegiado
+RUN mkdir -p /app/keys && chown $APP_UID /app/keys && chmod 700 /app/keys
+
 # Run as non-root user
 USER $APP_UID
 

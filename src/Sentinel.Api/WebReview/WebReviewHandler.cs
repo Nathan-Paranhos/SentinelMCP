@@ -283,14 +283,22 @@ public sealed class WebReviewHandler
         await RenderFormularioSetupAsync(contexto, retorno, null);
     }
 
+    private string? ObterAdminKeyConfigurada() =>
+        _config["Sentinel:AdminApiKey"] ?? Environment.GetEnvironmentVariable("ADMIN_API_KEY");
+
     private async Task RenderFormularioSetupAsync(HttpContext contexto, string retorno, string? erro, IFormCollection? valores = null)
     {
         var tokens = _antiforgery.GetAndStoreTokens(contexto);
         var enc = HtmlEncoder.Default;
-        var exigirAdminKey = _ambiente.IsProduction() && !string.IsNullOrWhiteSpace(_config["Sentinel:AdminApiKey"] ?? Environment.GetEnvironmentVariable("ADMIN_API_KEY"));
-        var blocoErro = string.IsNullOrWhiteSpace(erro)
+        var chaveConfigurada = ObterAdminKeyConfigurada();
+        var exigirAdminKey = _ambiente.IsProduction();
+        var erroEfetivo = erro;
+        if (exigirAdminKey && string.IsNullOrWhiteSpace(chaveConfigurada) && string.IsNullOrWhiteSpace(erroEfetivo))
+            erroEfetivo = "Em Production, defina ADMIN_API_KEY (ou Sentinel:AdminApiKey) no servidor para habilitar a configuração inicial.";
+
+        var blocoErro = string.IsNullOrWhiteSpace(erroEfetivo)
             ? string.Empty
-            : $@"<div class=""review-permission-notice"" role=""alert"">{enc.Encode(erro)}</div>";
+            : $@"<div class=""review-permission-notice"" role=""alert"">{enc.Encode(erroEfetivo)}</div>";
         var campoAdminKey = exigirAdminKey
             ? $@"<label class=""form-field"" for=""setup-admin-key""><span>Chave de Administração (ADMIN_API_KEY)</span><div class=""password-input-wrap""><input id=""setup-admin-key"" class=""form-input"" name=""adminKey"" type=""password"" required>{BotaoOlhoSenha("setup-admin-key")}</div></label>"
             : string.Empty;
@@ -362,9 +370,16 @@ public sealed class WebReviewHandler
         var formulario = await contexto.Request.ReadFormAsync(contexto.RequestAborted);
         var retorno = UrlLocal(formulario["returnUrl"]) ?? "/review";
 
-        var chaveConfigurada = _config["Sentinel:AdminApiKey"] ?? Environment.GetEnvironmentVariable("ADMIN_API_KEY");
-        if (_ambiente.IsProduction() && !string.IsNullOrWhiteSpace(chaveConfigurada))
+        var chaveConfigurada = ObterAdminKeyConfigurada();
+        if (_ambiente.IsProduction())
         {
+            if (string.IsNullOrWhiteSpace(chaveConfigurada))
+            {
+                contexto.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+                await RenderFormularioSetupAsync(contexto, retorno, "Em Production, configure ADMIN_API_KEY (ou Sentinel:AdminApiKey) no servidor antes de concluir a configuração inicial.", formulario);
+                return;
+            }
+
             var recebida = formulario["adminKey"].ToString();
             if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
                     System.Text.Encoding.UTF8.GetBytes(recebida),

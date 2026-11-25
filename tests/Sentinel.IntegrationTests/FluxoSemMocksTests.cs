@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Xunit;
 
@@ -288,5 +289,116 @@ public sealed class FluxoSemMocksTests : IDisposable
             if (File.Exists(arquivoTemp)) File.Delete(arquivoTemp);
             if (File.Exists(arquivoTemp + ".tmp")) File.Delete(arquivoTemp + ".tmp");
         }
+    }
+
+    [Fact]
+    public async Task SetupInicial_EmProduction_ExigeAdminApiKeyConfiguradaEValida()
+    {
+        using var fabricaSemChaveBase = new FabricaSentinel(new Dictionary<string, string?>
+        {
+            ["Sentinel:StorageProvider"] = "InMemory",
+            ["Sentinel:AllowInMemoryInProduction"] = "true",
+            ["Sentinel:SeedDemoData"] = "false",
+            ["Sentinel:AdminApiKey"] = ""
+        });
+        using var fabricaSemChave = fabricaSemChaveBase.WithWebHostBuilder(b => b.UseEnvironment("Production"));
+
+        var httpSemChave = fabricaSemChave.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true,
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var htmlSemChave = await httpSemChave.GetStringAsync("/auth/setup?returnUrl=%2Freview");
+        Assert.Contains("ADMIN_API_KEY", htmlSemChave);
+        var csrfSemChave = WebUtility.HtmlDecode(Regex.Match(htmlSemChave, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value);
+
+        var resp503 = await httpSemChave.PostAsync("/auth/setup", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["workspaceName"] = "Prod Org",
+            ["workspaceSlug"] = "prod-org",
+            ["projectName"] = "Prod API",
+            ["projectSlug"] = "prod-api",
+            ["username"] = "prod.adm",
+            ["password"] = "SenhaForte#2026",
+            ["confirmPassword"] = "SenhaForte#2026",
+            ["adminKey"] = "qualquer",
+            ["__RequestVerificationToken"] = csrfSemChave,
+            ["returnUrl"] = "/review"
+        }));
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, resp503.StatusCode);
+
+        using var fabricaComChaveBase = new FabricaSentinel(new Dictionary<string, string?>
+        {
+            ["Sentinel:StorageProvider"] = "InMemory",
+            ["Sentinel:AllowInMemoryInProduction"] = "true",
+            ["Sentinel:SeedDemoData"] = "false",
+            ["Sentinel:AdminApiKey"] = "chave-producao-forte-2026"
+        });
+        using var fabricaComChave = fabricaComChaveBase.WithWebHostBuilder(b => b.UseEnvironment("Production"));
+
+        var httpComChave = fabricaComChave.CreateClient(new WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false,
+            HandleCookies = true,
+            BaseAddress = new Uri("https://localhost")
+        });
+
+        var htmlComChave = await httpComChave.GetStringAsync("/auth/setup?returnUrl=%2Freview");
+        var csrfComChave = WebUtility.HtmlDecode(Regex.Match(htmlComChave, "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value);
+
+        var resp403 = await httpComChave.PostAsync("/auth/setup", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["workspaceName"] = "Prod Org",
+            ["workspaceSlug"] = "prod-org",
+            ["projectName"] = "Prod API",
+            ["projectSlug"] = "prod-api",
+            ["username"] = "prod.adm",
+            ["password"] = "SenhaForte#2026",
+            ["confirmPassword"] = "SenhaForte#2026",
+            ["adminKey"] = "chave-errada",
+            ["__RequestVerificationToken"] = csrfComChave,
+            ["returnUrl"] = "/review"
+        }));
+        Assert.Equal(HttpStatusCode.Forbidden, resp403.StatusCode);
+
+        var csrfRetry = WebUtility.HtmlDecode(Regex.Match(await resp403.Content.ReadAsStringAsync(), "name=\"__RequestVerificationToken\" value=\"([^\"]+)\"").Groups[1].Value);
+        var respOk = await httpComChave.PostAsync("/auth/setup", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["workspaceName"] = "Prod Org",
+            ["workspaceSlug"] = "prod-org",
+            ["projectName"] = "Prod API",
+            ["projectSlug"] = "prod-api",
+            ["username"] = "prod.adm",
+            ["password"] = "SenhaForte#2026",
+            ["confirmPassword"] = "SenhaForte#2026",
+            ["adminKey"] = "chave-producao-forte-2026",
+            ["__RequestVerificationToken"] = csrfRetry,
+            ["returnUrl"] = "/review"
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, respOk.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await httpComChave.GetAsync("/review")).StatusCode);
+    }
+
+    [Fact]
+    public async Task ProxyReverso_CabecalhosForwardedProtoEHost_ValidaOriginHttpsNoMcp()
+    {
+        using var fabrica = new FabricaSentinel(new Dictionary<string, string?>
+        {
+            ["Sentinel:StorageProvider"] = "InMemory",
+            ["Sentinel:SeedDemoData"] = "true",
+            ["Sentinel:AllowMockTokens"] = "true",
+            ["Sentinel:ReverseProxy:TrustAllProxies"] = "true"
+        });
+
+        var mcp = new ClienteMcp(fabrica.CreateClient());
+        var resp = await mcp.EnviarAsync(new { jsonrpc = "2.0", id = 1, method = "tools/list" }, DadosDemo.TokenAgente, req =>
+        {
+            req.Headers.Add("X-Forwarded-Proto", "https");
+            req.Headers.Add("X-Forwarded-Host", "sentinel.empresa.dev");
+            req.Headers.Add("Origin", "https://sentinel.empresa.dev");
+        });
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
     }
 }

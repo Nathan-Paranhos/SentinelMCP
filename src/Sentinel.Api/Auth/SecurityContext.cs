@@ -115,9 +115,13 @@ public sealed class ServicoIdentidadeAgente : IServicoIdentidadeAgente
         {
             var hashHex = Convert.ToHexString(hash).ToLowerInvariant();
             var registrada = await _chavesApi.ObterChaveApiPorHashAsync(hashHex);
-            if (registrada != null && registrada.Ativo && (!registrada.ExpiraEm.HasValue || registrada.ExpiraEm.Value > Relogio.AgoraUtc()))
+            var agora = Relogio.AgoraUtc();
+            if (registrada != null && registrada.Ativo && (!registrada.ExpiraEm.HasValue || registrada.ExpiraEm.Value > agora))
             {
-                await _chavesApi.RegistrarUsoChaveApiAsync(registrada.EspacoTrabalhoId, registrada.ChaveId, Relogio.AgoraUtc());
+                // Evita UPDATE transacional a cada leitura no PostgreSQL; registra no primeiro uso e depois no máximo a cada 60s
+                if (!registrada.UltimoUsoEm.HasValue || (agora - registrada.UltimoUsoEm.Value).TotalSeconds >= 60)
+                    await _chavesApi.RegistrarUsoChaveApiAsync(registrada.EspacoTrabalhoId, registrada.ChaveId, agora);
+
                 return new IdentidadeAgente(
                     new Ator(registrada.Emissor, registrada.Sujeito, registrada.ClienteId ?? "api-key", CanalDeAcesso.Mcp),
                     registrada.Escopos.ToHashSet(StringComparer.Ordinal), "api-key");

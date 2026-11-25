@@ -1,9 +1,12 @@
+using System.Net;
 using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.IdentityModel.Tokens;
 using ModelContextProtocol.AspNetCore;
 using Npgsql;
@@ -66,8 +69,42 @@ var builder = WebApplication.CreateBuilder(args);
 var config = builder.Configuration;
 var ambiente = builder.Environment;
 
+builder.WebHost.ConfigureKestrel(o =>
+{
+    o.AddServerHeader = false;
+    o.Limits.MaxRequestBodySize = config.GetValue<long?>("Sentinel:MaxRequestBodyBytes") ?? 1_048_576;
+});
+
 if (!ambiente.IsDevelopment())
     builder.Logging.AddJsonConsole();
+
+// Persistência de chaves DataProtection (sessão e CSRF sobrevivem a reinícios em containers)
+var protecaoDados = builder.Services.AddDataProtection().SetApplicationName("Sentinel-MCP");
+var dirChaves = config["Sentinel:DataProtection:KeysDirectory"] ?? Environment.GetEnvironmentVariable("SENTINEL_DATA_PROTECTION_KEYS_DIR");
+if (!string.IsNullOrWhiteSpace(dirChaves))
+{
+    Directory.CreateDirectory(dirChaves);
+    protecaoDados.PersistKeysToFileSystem(new DirectoryInfo(dirChaves));
+}
+
+// Cabeçalhos de proxy reverso (TLS terminado em Nginx, Caddy, Traefik, ALB ou Cloudflare)
+builder.Services.Configure<ForwardedHeadersOptions>(o =>
+{
+    o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedHost;
+    o.ForwardLimit = config.GetValue("Sentinel:ReverseProxy:ForwardLimit", 2);
+    if (config.GetValue("Sentinel:ReverseProxy:TrustAllProxies", false))
+    {
+        o.KnownNetworks.Clear();
+        o.KnownProxies.Clear();
+    }
+    else if (config.GetValue("Sentinel:ReverseProxy:TrustPrivateProxies", true))
+    {
+        o.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(IPAddress.Parse("10.0.0.0"), 8));
+        o.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(IPAddress.Parse("172.16.0.0"), 12));
+        o.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(IPAddress.Parse("192.168.0.0"), 16));
+        o.KnownNetworks.Add(new Microsoft.AspNetCore.HttpOverrides.IPNetwork(IPAddress.Parse("fc00::"), 7));
+    }
+});
 
 // Observabilidade e métricas (OpenTelemetry)
 builder.Services.AddOpenTelemetry()
@@ -237,6 +274,8 @@ if (await ExecutarComandosBancoAsync(app.Services, config, ambiente, args, log))
 const string PoliticaCsp =
     "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; " +
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'";
+
+app.UseForwardedHeaders();
 
 app.UseExceptionHandler(erro => erro.Run(async ctx =>
 {

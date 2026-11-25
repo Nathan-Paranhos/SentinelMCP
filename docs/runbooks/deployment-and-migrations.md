@@ -16,7 +16,7 @@ Padronizar a preparação do PostgreSQL, a execução de migrações e a subida 
 - Em Production a API recusa iniciar se o login de `Database` for superusuário ou tiver BYPASSRLS (a menos que `Sentinel:Database:AllowPrivilegedRole=true`, não recomendado).
 
 ### Migrações
-- Arquivos SQL em `db/migrations/` (`001_initial_schema.sql`, `002_rls_policies.sql`, `003_security_search_and_integrity.sql`), aplicados em ordem de nome.
+- Arquivos SQL em `db/migrations/` (`001_initial_schema.sql` a `006_workspace_update_grant.sql`), aplicados em ordem de nome.
 - Controle em `_schema_migrations (version, applied_at)`: cada arquivo é aplicado uma única vez, numa transação própria.
 - Um lock consultivo (`pg_advisory_lock`) serializa execuções concorrentes de `--migrate`.
 - Se a execução aplicar a `003`, o Sentinel reconstrói as projeções em seguida (com a conexão admin). Não é preciso rodar `--rebuild-projections` depois.
@@ -95,9 +95,12 @@ Pré-condições: imagem da nova versão construída; conexões `Database` e `Da
 | `ASPNETCORE_ENVIRONMENT` | `Production` é o padrão da imagem. Em Production, tokens mock e login de desenvolvimento ficam desabilitados independentemente da configuração. |
 | `Sentinel__StorageProvider` | `PostgreSQL` (padrão em Production via `appsettings.Production.json`). |
 | `ConnectionStrings__Database` / `ConnectionStrings__DatabaseAdmin` | Do cofre. |
-| `Authentication__Mcp__Authority` / `Authentication__Mcp__Audience` | JWT de agentes. |
-| `Authentication__Web__Authority` / `ClientId` / `ClientSecret` | OIDC da página de revisão. Sem OIDC, `/auth/login` responde 503 em Production. |
-| `Sentinel__ApiKeys__N__*` | Chaves de API de agentes (apenas o hash SHA-256). |
+| `ADMIN_API_KEY` / `Sentinel__AdminApiKey` | **Obrigatória em Production** para criação inicial via `/auth/setup` e para `POST /api/admin/workspaces`. |
+| `Sentinel__DataProtection__KeysDirectory` | Diretório persistente para chaves de cookie/CSRF (`compose.yaml` monta `/app/keys`). Evita perda de sessão ao reiniciar containers. |
+| `Sentinel__ReverseProxy__TrustPrivateProxies` / `TrustAllProxies` | Processa `X-Forwarded-Proto`, `X-Forwarded-Host` e `X-Forwarded-For` de proxies reversos TLS (`TrustPrivateProxies=true` por padrão para loopback/VPC/Docker). |
+| `Authentication__Mcp__Authority` / `Authentication__Mcp__Audience` | JWT de agentes (opcional; chaves `snt_...` SHA-256 funcionam sem OIDC). |
+| `Authentication__Web__Authority` / `ClientId` / `ClientSecret` | OIDC da página de revisão (opcional; sem OIDC, `/auth/login` usa autenticação local PBKDF2-SHA256). |
+| `Sentinel__ApiKeys__N__*` | Chaves de API estáticas de agentes (apenas o hash SHA-256). |
 
 ## 6. Rollback
 1. Pare a nova versão da API.
